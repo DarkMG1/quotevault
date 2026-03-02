@@ -76,9 +76,21 @@ export const useQuotes = () => {
         processSyncQueue();
     };
 
+    const deleteQuote = async (quote: Quote) => {
+        // 1. Optimistic UI: delete from local IndexedDB immediately
+        await db.quotes.delete(quote.id);
+
+        // 2. Add to Sync Queue
+        await addToSyncQueue('DELETE', quote);
+
+        // 3. Attempt to Sync
+        processSyncQueue();
+    };
+
     return {
         quotes,
         addQuote,
+        deleteQuote,
         refresh: fetchRemoteQuotes
     };
 };

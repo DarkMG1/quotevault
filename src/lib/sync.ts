@@ -34,11 +34,20 @@ export async function processSyncQueue() {
                     }]);
 
                 if (error) throw error;
+            } else if (item.action === 'DELETE') {
+                const { error } = await supabase
+                    .from('quotes')
+                    .delete()
+                    .eq('id', item.payload.id);
+
+                if (error) throw error;
             }
-            // Add UPDATE/DELETE logic here if needed later
+            // Add UPDATE logic here if needed later
 
             // On success, update the local DB to mark as synced and remove from queue
-            await db.quotes.update(item.payload.id, { sync_status: 'synced' });
+            if (item.action !== 'DELETE') {
+                await db.quotes.update(item.payload.id, { sync_status: 'synced' });
+            }
             await db.syncQueue.delete(item.id);
 
         } catch (err) {
