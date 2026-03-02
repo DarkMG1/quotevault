@@ -72,7 +72,7 @@ export const AddQuote = ({ isOpen, onClose }: AddQuoteProps) => {
                         initial={{ opacity: 0, scale: 0.95, y: 20 }}
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                        className="fixed inset-0 m-auto z-50 w-[90%] max-w-lg h-fit max-h-[90vh] bg-surface border border-slate-700/50 rounded-3xl shadow-2xl overflow-hidden flex flex-col"
+                        className="fixed inset-0 m-auto z-50 w-[90%] max-w-lg max-h-[85vh] bg-surface border border-slate-700/50 rounded-3xl shadow-2xl overflow-hidden flex flex-col"
                     >
                         <div className="flex items-center justify-between p-6 border-b border-white/5">
                             <div className="flex items-center space-x-2">
@@ -87,7 +87,7 @@ export const AddQuote = ({ isOpen, onClose }: AddQuoteProps) => {
                             </button>
                         </div>
 
-                        <form onSubmit={handleSubmit} className="p-6 space-y-5 flex-1 overflow-y-auto">
+                        <form onSubmit={handleSubmit} className="p-6 space-y-5 overflow-y-auto overscroll-contain">
                             <div>
                                 <label className="block text-sm font-medium text-slate-300 mb-1">Quote</label>
                                 <textarea
