@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import type { Quote } from '../types';
 
 export const Feed = () => {
-    const { quotes, refresh } = useQuotes();
+    const { quotes, refresh, deleteQuote } = useQuotes();
     const { encryptionKey } = useCrypto();
     const [search, setSearch] = useState('');
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -55,7 +55,7 @@ export const Feed = () => {
 
     const confirmDelete = async () => {
         if (!quoteToDelete) return;
-        await useQuotes().deleteQuote(quoteToDelete); // Need to access the function returned by the hook
+        await deleteQuote(quoteToDelete);
         setQuoteToDelete(null);
     };
 
