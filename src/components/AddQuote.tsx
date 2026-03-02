@@ -5,6 +5,7 @@ import { useQuotes } from '../hooks/useQuotes';
 import { useAuth } from '../hooks/useAuth';
 import { useCrypto } from '../hooks/useCrypto';
 import { encryptData } from '../lib/crypto';
+import { supabase } from '../lib/supabase';
 
 interface AddQuoteProps {
     isOpen: boolean;
@@ -20,6 +21,24 @@ export const AddQuote = ({ isOpen, onClose }: AddQuoteProps) => {
     const { addQuote } = useQuotes();
     const { user } = useAuth();
     const { encryptionKey, isLocked } = useCrypto();
+    const [profiles, setProfiles] = React.useState<{ first_name: string }[]>([]);
+
+    React.useEffect(() => {
+        const fetchProfiles = async () => {
+            const { data, error } = await supabase
+                .from('profiles')
+                .select('first_name')
+                .order('first_name');
+            if (data && !error) {
+                setProfiles(data);
+                // Auto-select first author if none selected yet
+                if (data.length > 0 && !author) {
+                    setAuthor(data[0].first_name);
+                }
+            }
+        };
+        fetchProfiles();
+    }, [author]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -102,14 +121,17 @@ export const AddQuote = ({ isOpen, onClose }: AddQuoteProps) => {
 
                             <div>
                                 <label className="block text-sm font-medium text-slate-300 mb-1">Author</label>
-                                <input
-                                    type="text"
+                                <select
                                     required
                                     value={author}
                                     onChange={(e) => setAuthor(e.target.value)}
-                                    placeholder="Franklin D. Roosevelt"
-                                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all"
-                                />
+                                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all appearance-none"
+                                >
+                                    <option value="" disabled>Select an Author</option>
+                                    {profiles.map((p, i) => (
+                                        <option key={i} value={p.first_name}>{p.first_name}</option>
+                                    ))}
+                                </select>
                             </div>
 
                             <div>
@@ -123,13 +145,13 @@ export const AddQuote = ({ isOpen, onClose }: AddQuoteProps) => {
                                 />
                             </div>
 
-                            <div>
+                            <div className="max-w-full overflow-hidden">
                                 <label className="block text-sm font-medium text-slate-300 mb-1">Date Said <span className="text-slate-500 font-normal">(Optional)</span></label>
                                 <input
                                     type="date"
                                     value={quoteDate}
                                     onChange={(e) => setQuoteDate(e.target.value)}
-                                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all [color-scheme:dark]"
+                                    className="w-full max-w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all [color-scheme:dark]"
                                 />
                             </div>
 
