@@ -28,6 +28,7 @@ export async function processSyncQueue() {
                         text: item.payload.text,
                         author: item.payload.author,
                         context: item.payload.context,
+                        quote_date: item.payload.quote_date,
                         created_at: item.payload.created_at,
                         user_id: item.payload.user_id
                     }]);

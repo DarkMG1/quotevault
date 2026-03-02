@@ -1,14 +1,47 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Search, CloudOff, Cloud, RefreshCw } from 'lucide-react';
 import { useQuotes } from '../hooks/useQuotes';
+import { useCrypto } from '../hooks/useCrypto';
+import { decryptData } from '../lib/crypto';
 import { motion, AnimatePresence } from 'framer-motion';
+import type { Quote } from '../types';
 
 export const Feed = () => {
     const { quotes, refresh } = useQuotes();
+    const { encryptionKey } = useCrypto();
     const [search, setSearch] = useState('');
     const [isRefreshing, setIsRefreshing] = useState(false);
+    const [decryptedQuotes, setDecryptedQuotes] = useState<Quote[] | null>(null);
 
-    const filteredQuotes = quotes?.filter(q =>
+    useEffect(() => {
+        if (!quotes) return;
+
+        const performDecryption = async () => {
+            const mapped = await Promise.all(
+                quotes.map(async (q) => {
+                    if (q.text.startsWith('$$E2E$$')) {
+                        try {
+                            if (!encryptionKey) throw new Error("No key");
+                            const bundle = JSON.parse(q.text.replace('$$E2E$$', ''));
+                            const plaintextJSON = await decryptData(bundle, encryptionKey);
+                            const override = JSON.parse(plaintextJSON);
+                            return { ...q, ...override };
+                        } catch (e) {
+                            return { ...q, text: '🔒 Encrypted Payload (Decryption Failed)', author: 'Unknown' };
+                        }
+                    }
+                    return q; // Plaintext fallback
+                })
+            );
+            setDecryptedQuotes(mapped);
+        };
+
+        performDecryption();
+    }, [quotes, encryptionKey]);
+
+    const displayQuotes = decryptedQuotes || [];
+
+    const filteredQuotes = displayQuotes.filter(q =>
         q.text.toLowerCase().includes(search.toLowerCase()) ||
         q.author.toLowerCase().includes(search.toLowerCase())
     ) || [];
@@ -68,7 +101,7 @@ export const Feed = () => {
                                     — {quote.author}
                                 </div>
                                 <div className="text-slate-500">
-                                    {new Date(quote.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                                    {new Date(quote.quote_date || quote.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}
                                 </div>
                             </div>
                             {quote.context && (
@@ -80,13 +113,13 @@ export const Feed = () => {
                     ))}
                 </AnimatePresence>
 
-                {filteredQuotes.length === 0 && quotes && quotes.length > 0 && (
+                {filteredQuotes.length === 0 && displayQuotes.length > 0 && (
                     <div className="text-center py-12 text-slate-500">
                         No quotes found matching "{search}"
                     </div>
                 )}
 
-                {(!quotes || quotes.length === 0) && (
+                {(!displayQuotes || displayQuotes.length === 0) && (
                     <div className="text-center py-20 px-6">
                         <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 border border-slate-700">
                             <span className="text-2xl">✍️</span>

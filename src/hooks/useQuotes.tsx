@@ -54,12 +54,13 @@ export const useQuotes = () => {
         };
     }, []);
 
-    const addQuote = async (text: string, author: string, context?: string, userId?: string) => {
+    const addQuote = async (text: string, author: string, context?: string, quoteDate?: string, userId?: string) => {
         const newQuote: Quote = {
             id: crypto.randomUUID(),
             text,
             author,
             context,
+            quote_date: quoteDate,
             created_at: new Date().toISOString(),
             user_id: userId || 'anonymous',
             sync_status: navigator.onLine ? 'synced' : 'pending' // Optimistic assumption

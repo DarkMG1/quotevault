@@ -3,6 +3,7 @@ export interface Quote {
     text: string;
     author: string;
     context?: string;
+    quote_date?: string; // YYYY-MM-DD
     created_at: string; // ISO string
     user_id: string;
     sync_status?: 'synced' | 'pending'; // Local only flag

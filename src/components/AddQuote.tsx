@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Save, Quote as QuoteIcon } from 'lucide-react';
 import { useQuotes } from '../hooks/useQuotes';
 import { useAuth } from '../hooks/useAuth';
+import { useCrypto } from '../hooks/useCrypto';
+import { encryptData } from '../lib/crypto';
 
 interface AddQuoteProps {
     isOpen: boolean;
@@ -13,9 +15,11 @@ export const AddQuote = ({ isOpen, onClose }: AddQuoteProps) => {
     const [text, setText] = useState('');
     const [author, setAuthor] = useState('');
     const [context, setContext] = useState('');
+    const [quoteDate, setQuoteDate] = useState(new Date().toISOString().split('T')[0]);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const { addQuote } = useQuotes();
     const { user } = useAuth();
+    const { encryptionKey, isLocked } = useCrypto();
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -23,7 +27,25 @@ export const AddQuote = ({ isOpen, onClose }: AddQuoteProps) => {
 
         setIsSubmitting(true);
         try {
-            await addQuote(text, author, context, user?.id);
+            if (isLocked || !encryptionKey) {
+                throw new Error("Cannot save: Vault is locked.");
+            }
+
+            // Create JSON payload of sensitive fields
+            const payloadToEncrypt = JSON.stringify({
+                text: text.trim(),
+                author: author.trim(),
+                context: context.trim()
+            });
+
+            const encryptedBundle = await encryptData(payloadToEncrypt, encryptionKey);
+
+            // We pass the Base64 ciphertext straight into the 'text' field to minimize db schema changes.
+            // A special prefix $$E2E$$ helps the UI identify an encrypted string later.
+            const serializedCiphertext = `$$E2E$$${JSON.stringify(encryptedBundle)}`;
+
+            // Instead of passing plaintext, we pass the ciphertext bundle into text, and empty author/context
+            await addQuote(serializedCiphertext, 'ENCRYPTED', 'ENCRYPTED', quoteDate, user?.id);
             setText('');
             setAuthor('');
             setContext('');
@@ -50,7 +72,7 @@ export const AddQuote = ({ isOpen, onClose }: AddQuoteProps) => {
                         initial={{ opacity: 0, scale: 0.95, y: 20 }}
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                        className="fixed inset-x-4 bottom-4 top-20 sm:top-auto sm:inset-auto sm:w-full z-50 max-w-lg mx-auto bg-surface border border-slate-700/50 rounded-3xl shadow-2xl overflow-hidden flex flex-col"
+                        className="fixed inset-0 m-auto z-50 w-[90%] max-w-lg h-fit max-h-[90vh] bg-surface border border-slate-700/50 rounded-3xl shadow-2xl overflow-hidden flex flex-col"
                     >
                         <div className="flex items-center justify-between p-6 border-b border-white/5">
                             <div className="flex items-center space-x-2">
@@ -98,6 +120,16 @@ export const AddQuote = ({ isOpen, onClose }: AddQuoteProps) => {
                                     onChange={(e) => setContext(e.target.value)}
                                     placeholder="In a letter to a friend, 1945"
                                     className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-slate-300 mb-1">Date Said <span className="text-slate-500 font-normal">(Optional)</span></label>
+                                <input
+                                    type="date"
+                                    value={quoteDate}
+                                    onChange={(e) => setQuoteDate(e.target.value)}
+                                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all [color-scheme:dark]"
                                 />
                             </div>
 
