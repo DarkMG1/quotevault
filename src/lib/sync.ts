@@ -53,3 +53,11 @@ export async function processSyncQueue() {
 window.addEventListener('online', () => {
     processSyncQueue();
 });
+
+// Also try to sync when the browser regains focus/visibility
+// Mobile browsers often pause JS and miss the 'online' event when backgrounded
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+        processSyncQueue();
+    }
+});
