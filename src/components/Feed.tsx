@@ -120,7 +120,7 @@ export const Feed = () => {
                                 <div className="absolute top-4 right-4 text-xs">
                                     {quote.sync_status === 'pending' || quote.sync_status === 'rejected' ? <span title={quote.sync_status === 'rejected' ? 'Sync rejected' : 'Pending Sync'}><CloudOff aria-hidden="true" className={`w-4 h-4 ${quote.sync_status === 'rejected' ? 'text-red-400' : 'text-orange-400'}`} /></span> : <span title="Synced"><Cloud aria-hidden="true" className="w-4 h-4 text-emerald-400/50 opacity-0 group-hover:opacity-100 transition-opacity" /></span>}
                                 </div>
-                                <blockquote className="text-lg md:text-xl font-medium text-slate-200 mb-4 leading-relaxed pr-8 select-text">"{quote.text}"</blockquote>
+                                <blockquote className="text-lg md:text-xl font-medium text-slate-200 mb-4 leading-relaxed pr-8 select-text whitespace-pre-wrap">"{quote.text}"</blockquote>
                                 <div className="flex items-center justify-between text-sm">
                                     <div className="font-semibold text-primary-400">— {quote.author}</div>
                                     <div className="text-slate-500 select-none">{new Date(quote.quote_date || quote.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}</div>
