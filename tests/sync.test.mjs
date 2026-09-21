@@ -63,7 +63,7 @@ function runProvider(db, { userId = 'u1', generation = 'g1', legacyGeneration = 
     'dexie-react-hooks': { useLiveQuery: (_query, _deps, fallback) => fallback },
     '../lib/db': { db }, '../lib/sync': { cancelSyncRequests() {}, createSyncOperation() {}, enqueueDeleteMutation() {}, processSyncQueue: async () => {} },
     '../lib/supabase': { supabase: { channel: () => ({ on() { return this; }, subscribe() { return { unsubscribe: async () => {} }; } }) } },
-    './useAuth': { useAuth: () => ({ user: { id: userId } }) },
+    './useAuth': { useAuth: () => ({ user: { id: userId }, canSync: true }) },
     './useCrypto': { useCrypto: () => ({ vaultGeneration: generation, legacyVaultGeneration: legacyGeneration, lockVault() {} }) },
   }, { window: { clearTimeout() {}, setTimeout() {}, addEventListener() {}, removeEventListener() {} }, document: { addEventListener() {}, removeEventListener() {}, visibilityState: 'visible' }, crypto: webcrypto });
   const render = () => {

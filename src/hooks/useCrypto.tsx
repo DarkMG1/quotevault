@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { createVaultConfig, unlockWithVerifier } from '../lib/crypto';
-import { cacheVaultState, loadVaultState, parseVaultState } from '../lib/vault';
+import { cacheVaultState, loadVaultState, parseVaultState, readCachedVaultState } from '../lib/vault';
 import type { VaultState } from '../lib/vault';
 import { supabase } from '../lib/supabase';
 import { Lock, Loader2 } from 'lucide-react';
@@ -20,13 +20,15 @@ const CryptoContext = createContext<CryptoContextType>({
 });
 
 export const CryptoProvider = ({ children }: { children: ReactNode }) => {
-    const { user, signOut } = useAuth();
+    const { user, canSync, signOut } = useAuth();
     const [encryptionKey, setEncryptionKey] = useState<CryptoKey | null>(null);
-    const [state, setState] = useState<VaultState | null>(null);
+    const [state, setState] = useState<VaultState | null>(() => user ? readCachedVaultState(user.id) : null);
+    const currentState = useRef(state);
     const [password, setPassword] = useState('');
-    const [busy, setBusy] = useState(true);
+    const [busy, setBusy] = useState(!state);
     const [error, setError] = useState('');
     const request = useRef(0);
+    const unlockRequest = useRef(0);
     const keyGeneration = useRef<string | null>(null);
     const userId = user?.id;
 
@@ -34,8 +36,13 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
         if (!userId) return;
         const version = ++request.current;
         try {
-            const next = await loadVaultState(userId);
+            const next = await loadVaultState(userId, !canSync);
             if (request.current === version) {
+                if (currentState.current?.generation !== next.generation) {
+                    unlockRequest.current++;
+                    setBusy(false);
+                }
+                currentState.current = next;
                 if (keyGeneration.current && keyGeneration.current !== next.generation) {
                     keyGeneration.current = null;
                     setEncryptionKey(null);
@@ -43,20 +50,30 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
                 setState(next);
             }
         } catch (cause) {
-            if (request.current === version) setError(cause instanceof Error ? cause.message : 'Could not load vault settings.');
+            if (request.current === version) {
+                unlockRequest.current++;
+                keyGeneration.current = null;
+                currentState.current = null;
+                setEncryptionKey(null);
+                setState(null);
+                setError(cause instanceof Error ? cause.message : 'Could not load vault settings.');
+            }
         } finally {
             if (request.current === version) setBusy(false);
         }
-    }, [userId]);
+    }, [canSync, userId]);
     useEffect(() => {
         const lifecycle = request;
+        const unlockLifecycle = unlockRequest;
         // Settings arrive asynchronously; the request counter also cancels stale results.
         // eslint-disable-next-line react-hooks/set-state-in-effect
         void refreshSettings();
-        return () => { lifecycle.current++; };
+        return () => { lifecycle.current++; unlockLifecycle.current++; };
     }, [refreshSettings]);
 
     const lockVault = useCallback(() => {
+        unlockRequest.current++;
+        currentState.current = null;
         keyGeneration.current = null;
         setEncryptionKey(null);
         setPassword('');
@@ -69,7 +86,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
     const handleUnlock = async (event: FormEvent) => {
         event.preventDefault();
         if (!state || !user || busy || !password) return;
-        const version = ++request.current;
+        const version = ++unlockRequest.current;
         setBusy(true);
         setError('');
         try {
@@ -78,6 +95,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
             if (state.verifier) {
                 key = await unlockWithVerifier(password, state.kdf, state.verifier);
             } else {
+                if (!canSync) throw new Error('Connect to initialize the vault.');
                 if (!isAdminUser(user)) throw new Error('The administrator must initialize the vault first.');
                 const config = await createVaultConfig(password);
                 const { data, error: initError } = await supabase.rpc('initialize_vault', {
@@ -85,21 +103,22 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
                 });
                 if (initError) throw new Error(initError.message);
                 const initialized = parseVaultState(data);
-                if (request.current !== version) return;
+                if (unlockRequest.current !== version) return;
                 cacheVaultState(user.id, initialized);
+                currentState.current = initialized;
                 setState(initialized);
                 key = config.key;
                 generation = initialized.generation;
             }
-            if (request.current === version) {
+            if (unlockRequest.current === version) {
                 keyGeneration.current = generation;
                 setEncryptionKey(key);
                 setPassword('');
             }
         } catch (cause) {
-            if (request.current === version) setError(cause instanceof Error ? cause.message : 'Could not unlock the vault.');
+            if (unlockRequest.current === version) setError(cause instanceof Error ? cause.message : 'Could not unlock the vault.');
         } finally {
-            if (request.current === version) setBusy(false);
+            if (unlockRequest.current === version) setBusy(false);
         }
     };
 

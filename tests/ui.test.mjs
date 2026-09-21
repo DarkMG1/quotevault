@@ -77,7 +77,7 @@ const authReact = {
   useContext: context => context.value,
   useState: initial => {
     const index = authCursor++;
-    authStates[index] ??= initial;
+    if (!(index in authStates)) authStates[index] = typeof initial === 'function' ? initial() : initial;
     return [authStates[index], value => { authStates[index] = value; }];
   },
   useRef: initial => ({ current: initial }),
@@ -87,7 +87,10 @@ const authReact = {
 const authModule = load('src/hooks/useAuth.tsx', {
   react: authReact,
   'react/jsx-runtime': { jsx: (type, props) => type(props) },
+  '@supabase/supabase-js': { isAuthRetryableFetchError: () => false },
+  '../lib/vault': { readCachedVaultState: () => null, clearCachedVaultState() {} },
   '../lib/supabase': {
+    readCachedSessionUser: () => null, clearCachedSession() {}, isLocallySignedOut: () => false, setLocalSignedOut() {}, localSignOutKey: 'test-signout',
     supabase: {
       auth: {
         getSession: () => sessionDeferred.promise,
@@ -95,7 +98,7 @@ const authModule = load('src/hooks/useAuth.tsx', {
       },
     },
   },
-});
+}, { navigator: { onLine: true }, window: { addEventListener() {}, removeEventListener() {} } });
 const renderAuth = () => { authCursor = 0; authModule.AuthProvider({ children: null }); };
 renderAuth();
 const authCleanup = authEffect();

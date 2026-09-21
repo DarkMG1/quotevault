@@ -11,7 +11,7 @@ This record distinguishes implemented fixes from outstanding production work.
 | U2 | Feed and author loading states, pending counts, sync times, accessible feedback, and pending-action guards are implemented. |
 | D1 | New quote timestamps must match browser-compatible finite ISO timestamps, including bounded hours, minutes, and seconds. |
 | I1, I3 | Nginx now serves the protected release root. Missing assets return 404; a QuoteVault-only Cloudflare rule respects origin edge/browser cache headers. Live headers verify revalidation for HTML, service worker, manifest and errors, and immutable caching for hashed assets. |
-| I2 | Reviewed application revision `1398bc812363219f7998e62e171a4538eac853c4` is published on main and the audit branch and active in production. Served release metadata, HTML and script hashes match. |
+| I2 | Reviewed application revision `1398bc812363219f7998e62e171a4538eac853c4` was published on main and the audit branch and activated in production. Its served release metadata, HTML and script hashes were verified; the offline-startup follow-up below builds on that release. |
 
 Additional safeguards include private generation notifications, byte-aware sync
 batches, limits on new ciphertext and requests, guarded authentication retries,
@@ -67,3 +67,29 @@ Final local checks passed: 16 Node runner entries, lint, production build,
 PostgreSQL regression suites, and the real Chromium PWA flow. The dependency
 audit reported zero vulnerabilities. The existing large-bundle warning remains;
 code splitting is deferred until startup profiling demonstrates a benefit.
+
+## Offline startup follow-up
+
+A cold start with an expired saved access token previously waited for Supabase
+session renewal before showing the local unlock screen. A real Chromium
+regression reproduced this even with the app shell and encrypted vault cached.
+Prepared devices now show local unlock immediately, including when the browser
+reports online but the authentication server is unreachable. Remote sync,
+Realtime, author loading and account controls wait for a usable SDK session;
+the server continues to enforce authorization.
+
+The shared passphrase and derived key remain memory-only. Wrong passphrases
+cannot unlock; quotes and pending inserts remain ciphertext. Explicit sign-out
+sets a durable local latch before waiting for remote logout, preventing another
+tab or restart from reviving access. Only a successful new sign-in clears it.
+Observed session or membership denial locks the vault and removes cached
+preparation. Disconnected devices cannot learn of remote revocation until they
+reconnect.
+
+Verification: 17 automated Node checks, lint, and five real Chromium scenarios
+passed: expired-session offline reload/create/delete/reconnect, unreachable
+session renewal followed by rejection, offline sign-out/reload, membership
+revocation after local unlock, and a second tab during pending online sign-out.
+The expired-session and second-tab regressions were observed failing before
+their fixes. A separate cheaper-agent security review was checked by the
+primary agent. No database migration or encryption-format change is required.

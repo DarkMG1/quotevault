@@ -14,7 +14,7 @@ function setup() {
     './supabase': { supabase: { rpc: async name => {
       assert.equal(name, 'get_vault_state'); calls++; return network.result;
     } } },
-  }, { navigator, atob, localStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) } });
+  }, { navigator, atob, localStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) } });
   return { ...exports, navigator, network, calls: () => calls, stored };
 }
 
@@ -32,6 +32,7 @@ test('an authorization denial cannot fall back to cached access', async () => {
   await app.loadVaultState('alice');
   app.network.result = { data: null, error: { code: '42501', message: 'Access denied' } };
   await assert.rejects(app.loadVaultState('alice'), /Access denied/);
+  assert.equal(app.readCachedVaultState('alice'), null, 'denied membership removes offline preparation');
 });
 
 test('a transport failure permits previously prepared offline access', async () => {
@@ -50,4 +51,12 @@ test('invalid server settings never replace the valid offline cache', async () =
   await assert.rejects(app.loadVaultState('alice'), /Invalid/);
   app.navigator.onLine = false;
   assert.equal((await app.loadVaultState('alice')).kdf.iterations, 600000);
+});
+
+test('local-only settings never wait for an online session refresh', async () => {
+  const app = setup();
+  await app.loadVaultState('alice');
+  app.network.result = { data: null, error: { code: '42501', message: 'Must not be requested' } };
+  assert.equal((await app.loadVaultState('alice', true)).generation, state.generation);
+  assert.equal(app.calls(), 1);
 });

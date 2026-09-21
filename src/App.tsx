@@ -20,7 +20,7 @@ function UpdateNotice() {
 }
 
 const ProtectedRoute = () => {
-  const { user, loading, error, retry } = useAuth();
+  const { user, loading, canSync, error, retry } = useAuth();
   const [currentPath, setCurrentPath] = useState(window.location.hash);
 
   useEffect(() => {
@@ -51,7 +51,10 @@ const ProtectedRoute = () => {
     <CryptoProvider key={user.id}>
       <QuotesProvider>
       <Layout currentPath={currentPath}>
-        {currentPath === '#admin' ? (
+        {!canSync && <p role="status" className="p-4 text-sm text-slate-300">Using saved quotes on this device. Sync resumes when your session reconnects. <button onClick={retry} className="text-primary-400 underline">Retry connection</button></p>}
+        {!canSync && (currentPath === '#admin' || currentPath === '#profile') ? (
+          <p className="p-4">Connect and restore your session to manage account settings.</p>
+        ) : currentPath === '#admin' ? (
           <AdminDashboard />
         ) : currentPath === '#profile' ? (
           <Profile />

@@ -21,7 +21,7 @@ export const AddQuote = ({ onClose }: AddQuoteProps) => {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [saveError, setSaveError] = useState('');
     const { addQuote } = useQuotes();
-    const { user } = useAuth();
+    const { user, canSync } = useAuth();
     const { encryptionKey, isLocked } = useCrypto();
     const [profiles, setProfiles] = useState<AuthorProfile[]>([]);
     const [isLoadingProfiles, setIsLoadingProfiles] = useState(false);
@@ -38,7 +38,7 @@ export const AddQuote = ({ onClose }: AddQuoteProps) => {
         // The loading flag describes the asynchronous profile request started below.
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setIsLoadingProfiles(true);
-        loadProfiles(user.id).then((data) => {
+        loadProfiles(user.id, canSync).then((data) => {
             if (active) {
                 setProfiles(data);
                 setProfileError('');
@@ -52,7 +52,7 @@ export const AddQuote = ({ onClose }: AddQuoteProps) => {
             if (active) setProfileError(getErrorMessage(error, 'Unable to load authors. Check your connection and retry.'));
         }).finally(() => { if (active) setIsLoadingProfiles(false); });
         return () => { active = false; };
-    }, [profileRetry, user?.id]);
+    }, [canSync, profileRetry, user?.id]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();

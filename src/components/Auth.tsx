@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { setLocalSignedOut, supabase } from '../lib/supabase';
 import { Loader2, Mail, Lock, Quote } from 'lucide-react';
 import { getErrorMessage } from './ui';
+import { useAuth } from '../hooks/useAuth';
 
 export const AuthUI = () => {
+    const { retry, signingOut } = useAuth();
     const [loading, setLoading] = useState(false);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -14,6 +16,7 @@ export const AuthUI = () => {
 
     const handleAuth = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (signingOut) return;
         setLoading(true);
         setErrorMsg('');
 
@@ -42,6 +45,8 @@ export const AuthUI = () => {
                     password
                 });
                 if (error) throw error;
+                setLocalSignedOut(false);
+                retry();
             }
         } catch (error: unknown) {
             setErrorMsg(getErrorMessage(error, 'An error occurred during authentication'));
@@ -137,7 +142,7 @@ export const AuthUI = () => {
 
                     <button
                         type="submit"
-                        disabled={loading}
+                        disabled={loading || signingOut}
                         aria-busy={loading}
                         className="w-full bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-500 hover:to-primary-400 text-white font-semibold py-3.5 rounded-xl shadow-lg shadow-primary-500/25 transition-all flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed hover:-translate-y-0.5"
                     >

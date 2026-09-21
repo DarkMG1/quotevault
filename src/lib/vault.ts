@@ -36,16 +36,25 @@ export function cacheVaultState(userId: string, state: VaultState) {
     try { localStorage.setItem(cacheKey(userId), JSON.stringify(state)); } catch { /* Storage may be disabled. */ }
 }
 
-export async function loadVaultState(userId: string): Promise<VaultState> {
-    let cached: VaultState | null = null;
-    try { cached = parseVaultState(JSON.parse(localStorage.getItem(cacheKey(userId)) || 'null')); } catch { /* No valid cache yet. */ }
-    if (!navigator.onLine) {
+export function readCachedVaultState(userId: string): VaultState | null {
+    try { return parseVaultState(JSON.parse(localStorage.getItem(cacheKey(userId)) || 'null')); }
+    catch { return null; }
+}
+
+export function clearCachedVaultState(userId: string): void {
+    try { localStorage.removeItem(cacheKey(userId)); } catch { /* Storage may be unavailable. */ }
+}
+
+export async function loadVaultState(userId: string, localOnly = false): Promise<VaultState> {
+    const cached = readCachedVaultState(userId);
+    if (localOnly || !navigator.onLine) {
         if (cached) return cached;
         throw new Error('Connect once to prepare this account for offline access.');
     }
     const { data, error } = await supabase.rpc('get_vault_state');
     if (error) {
         if (!error.code && cached) return cached; // Transport failure, not an authorization denial.
+        clearCachedVaultState(userId);
         throw new Error(error.message || 'Could not load vault settings.');
     }
     const state = parseVaultState(data);

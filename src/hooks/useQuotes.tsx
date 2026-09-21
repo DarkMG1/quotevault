@@ -25,7 +25,7 @@ const QuotesContext = createContext<QuotesContextValue | null>(null);
 const activeIdentityKey = 'sync-active-identity';
 
 export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
-    const { user } = useAuth();
+    const { user, canSync } = useAuth();
     const { vaultGeneration, legacyVaultGeneration, lockVault } = useCrypto();
     const [initializedIdentity, setInitializedIdentity] = useState<string | null>(null);
     const [lastSync, setLastSync] = useState<{ identity: string; at: string } | null>(null);
@@ -40,7 +40,7 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
     const identity = context && `${context.actorId}:${context.generation}`;
     const ready = initializedIdentity === identity;
     const loading = !ready;
-    const initialFetchPending = ready && lastSync?.identity !== identity;
+    const initialFetchPending = canSync && ready && lastSync?.identity !== identity;
     const quotes = useLiveQuery<Quote[], Quote[]>(
         () => ready ? db.quotes.orderBy('created_at').reverse().toArray() : Promise.resolve<Quote[]>([]),
         [ready], [] as Quote[]
@@ -110,6 +110,7 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
         const token = lifecycle.current;
         const active = () => lifecycle.current === token;
         if (!await initialize(context, legacyVaultGeneration, active) || !active()) return;
+        if (!canSync) return;
         try {
             const performed = await processSyncQueue(context);
             if (!active()) return;
@@ -121,7 +122,7 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
         } catch (error) {
             if (active()) setSyncError(error instanceof Error ? error.message : 'Unable to synchronize. Changes remain on this device.');
         }
-    }, [context, initialize, legacyVaultGeneration]);
+    }, [canSync, context, initialize, legacyVaultGeneration]);
 
     useEffect(() => {
         let active = true;
@@ -134,10 +135,10 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
             if (currentLifecycle.current === token) currentLifecycle.current++;
             cancelSyncRequests();
         };
-    }, [context, initialize, legacyVaultGeneration]);
+    }, [canSync, context, initialize, legacyVaultGeneration]);
 
     useEffect(() => {
-        if (!context || !ready) return;
+        if (!context || !ready || !canSync) return;
         let timer: number | undefined;
         const schedule = () => {
             window.clearTimeout(timer);
@@ -158,7 +159,7 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
             document.removeEventListener('visibilitychange', visible);
             void channel.unsubscribe();
         };
-    }, [context, ready, refresh]);
+    }, [canSync, context, ready, refresh]);
 
     const addQuote = useCallback(async (text: string, author: string, quoteContext?: string, quoteDate?: string) => {
         if (!context || !ready) throw new Error('Wait for the vault to finish loading before saving a quote.');

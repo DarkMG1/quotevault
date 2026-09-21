@@ -56,11 +56,11 @@ export function clearProfileCache(userId: string): void {
     try { localStorage.removeItem(profileStorageKey(userId)); } catch { /* Storage can be unavailable in private mode. */ }
 }
 
-export async function loadProfiles(userId: string): Promise<AuthorProfile[]> {
+export async function loadProfiles(userId: string, canFetch = true): Promise<AuthorProfile[]> {
     const cached = profileMemory.get(userId) ?? readCachedProfiles(userId);
     if (cached) profileMemory.set(userId, cached);
     if (cached && Date.now() - cached.fetchedAt < PROFILE_CACHE_TTL_MS) return cached.profiles;
-    if (!navigator.onLine) {
+    if (!canFetch || !navigator.onLine) {
         if (cached) return cached.profiles;
         throw new Error('Authors are unavailable offline. Connect once to load the author list.');
     }
