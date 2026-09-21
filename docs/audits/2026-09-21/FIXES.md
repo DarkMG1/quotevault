@@ -10,8 +10,8 @@ This record distinguishes implemented fixes from outstanding production work.
 | U1 | Sign-out failures are surfaced through the persistent authentication provider, including when the SDK removes the local session. |
 | U2 | Feed and author loading states, pending counts, sync times, accessible feedback, and pending-action guards are implemented. |
 | D1 | New quote timestamps must match browser-compatible finite ISO timestamps, including bounded hours, minutes, and seconds. |
-| I1, I3 | Protected release directory and reviewed Nginx configuration are prepared. Activating the new root/cache policy requires the host administrator's sudo step. |
-| I2 | Publish the reviewed commit and integrate it into the default branch after checks pass; record the resulting revision in release metadata. |
+| I1, I3 | Nginx now serves the protected release root. Missing assets return 404; a QuoteVault-only Cloudflare rule respects origin edge/browser cache headers. Live headers verify revalidation for HTML, service worker, manifest and errors, and immutable caching for hashed assets. |
+| I2 | Reviewed application revision `1398bc812363219f7998e62e171a4538eac853c4` is published on main and the audit branch and active in production. Served release metadata, HTML and script hashes match. |
 
 Additional safeguards include private generation notifications, byte-aware sync
 batches, limits on new ciphertext and requests, guarded authentication retries,
@@ -31,6 +31,8 @@ portable exports, and search filters remain product suggestions, not defects.
   hosted schema before applying it; the additive browser timestamp follow-up
   was also applied and verified. All six application tables match private
   pre-migration snapshots exactly; 18 encrypted quotes and six accounts remain.
+- Hosted Realtime now requires private channels. Live WebSocket probes reject
+  public joins and deny anonymous private-channel access.
 - PostgreSQL 17 regression checks cover authorization, migration compatibility,
   reapplication, limits, timestamp validation, and private broadcast membership.
 - The real browser check uses synthetic accounts and a loopback backend to
@@ -39,7 +41,11 @@ portable exports, and search filters remain product suggestions, not defects.
 - The standard backup scripts restored a populated synthetic account, quote,
   and vault configuration into a fresh local database. This does not establish
   hosted disaster recovery. The managed backup API returned no backup entries;
-  direct PostgreSQL credentials and a full production restore remain outstanding.
+  a transactional, non-login role rehearsal confirmed that management access
+  cannot grant the database-owner role to a temporary dump identity. The probe
+  role was removed and catalog absence verified. Direct PostgreSQL credentials
+  and a full production dump/restore remain outstanding. No database password
+  was changed and no backup login was retained.
 - Public-safety checks include redacted Gitleaks scans of reachable Git history
   and outgoing files, manual inspection of configuration/test artifacts, and
   regression checks rejecting privileged keys and unexpected `VITE_` variables.
@@ -50,6 +56,12 @@ portable exports, and search filters remain product suggestions, not defects.
 Use [operations.md](../../operations.md) for release, restore, and health commands.
 Physical-device installation and authenticated hosted Realtime delivery still
 require separate verification; synthetic browser and SQL tests do not prove them.
+
+Production checks passed after Nginx activation and the CDN correction: HTTPS
+release/asset hashes, anonymous table denial, security/cache headers, Nginx
+service state, protected release directory permissions, and a Chromium sign-in
+page smoke check with no page errors. The application revision
+`1398bc812363219f7998e62e171a4538eac853c4` also passed GitHub Actions.
 
 Final local checks passed: 16 Node runner entries, lint, production build,
 PostgreSQL regression suites, and the real Chromium PWA flow. The dependency

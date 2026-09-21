@@ -59,6 +59,10 @@ Do not roll back to the pre-secure-sync frontend. Keep at least the current
 and previous compatible releases; inspect disk use before pruning older
 release directories. Match CDN caching to origin headers: HTML, service
 worker, manifest and errors revalidate; successful hashed assets are immutable.
+The Cloudflare cache rule `QuoteVault respect origin cache headers` matches only
+`http.host eq "quotes.darkmg1.dev"`: eligible for caching, use origin Cache-Control
+at the edge (bypass if absent), and respect origin browser TTL. Verify the public
+headers after changing either Nginx or CDN rules; zone defaults can override them.
 
 ## Backups and restoration
 
