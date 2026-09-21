@@ -26,9 +26,11 @@ One shared provider replaces repeated hook subscriptions. A sync RPC handles up 
 
 ## Release status
 
-Production has not been changed. The VPS serves static files; the required database changes belong to Supabase project `umcprnfdaomntzhvmaoc`. Only the public application key was available during remediation. SQL management access is required to inspect the actual schema, save a database backup, apply the migration transactionally, and verify permissions before frontend deployment.
+Deployed to https://quotes.darkmg1.dev on September 21, 2026 (UTC). The Supabase migration was rehearsed with rollback against the actual schema, then committed before an atomic frontend directory swap. All 18 encrypted quotes, six profiles, and six allowlist entries were compared with the predeployment backup and preserved; all six accounts remain. Existing encryption derivation is preserved, while the raw key hash has been replaced by an authenticated verifier.
 
-The original production checkout and modified production lockfile must be retained for rollback. Nginx already serves `/pages/quotevault/dist`; replacing that site's release directory does not require changing other VPS services.
+Production inspection also identified legacy TEXT dates, duplicate profile hooks, and explicit Supabase default function grants. The migration now converts valid dates, replaces the known legacy hooks, and revokes anonymous function execution explicitly. The local fixtures reproduce these conditions.
+
+The original checkout, built assets, environment file, and modified production lockfile are retained at `/pages/quotevault-backup-5798655-20260921T025735Z`. Private database/schema and environment snapshots are retained locally at `/Users/chiragbhat/.local/share/quotevault/backups/20260921T025735Z-m12c9205/`. A rollback must keep the frontend and database compatible; restoring only the old frontend is insufficient. Nginx continues serving `/pages/quotevault/dist`; no other VPS service was changed.
 
 ## Validation
 
@@ -42,5 +44,7 @@ The original production checkout and modified production lockfile must be retain
 | Browser / actual IndexedDB | PASS: encrypted creation and deletion, deletion after fresh unlock, native dialog Escape/focus restoration, and phone dialog layout at 390 × 844. |
 | Built PWA with browser network disabled | PASS: cold reload, cached verifier unlock, decrypted cached quotes, cached authors, a pending local save, and successful synchronization after reconnecting. All browser data used a disposable local backend. |
 | Release assets | PASS: production Supabase endpoint in the production bundle, no local test endpoint, service worker, manifest icon paths, and PNG dimensions. |
+| Hosted database | PASS: exact existing-data comparison, restricted table/function grants, membership and owner/admin checks, sync retries and deletion replay, and absence of test receipts after rollback. Synthetic mutation checks ran in transactions ending in rollback. |
+| Production HTTPS | PASS: anonymous table/RPC requests denied; served HTML, JS, CSS, service worker, manifest, and icons match the verified build by SHA-256. New sign-in form renders in the browser. |
 
-The historical `reproduce.mjs` is not the regression suite for this branch. The local database fixture models Supabase's schema and roles; hosted Auth, actual production RLS/data/triggers, live realtime delivery, and physical-device installation remain unverified until production SQL access is available. Local test servers and the disposable PostgreSQL server were stopped after validation; PostgreSQL 17 remains installed for reproducible tests.
+Safe production verification metadata is recorded in [production-verification.json](production-verification.json). Actual hosted password login and shared-key entry, authenticated realtime delivery, and physical-device installation remain untested. The historical `reproduce.mjs` is not the regression suite for this branch. Local test servers and the disposable PostgreSQL server were stopped after validation; PostgreSQL 17 remains installed for reproducible tests.

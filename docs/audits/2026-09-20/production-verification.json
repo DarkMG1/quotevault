@@ -1,0 +1,29 @@
+[
+  {
+    "verification": {
+      "users": 6,
+      "quotes": 18,
+      "project": "umcprnfdaomntzhvmaoc",
+      "profiles": 6,
+      "allowlist": 6,
+      "checked_at": "2026-09-21T03:09:06.423+00:00",
+      "auth_triggers": [
+        "qv_allow_signup_before_insert",
+        "qv_sync_profile_after_change"
+      ],
+      "raw_hash_rows": 0,
+      "quote_date_type": "date",
+      "encrypted_quotes": 18,
+      "anonymous_profiles_read": false,
+      "anonymous_settings_read": false,
+      "quotes_realtime_enabled": true,
+      "test_receipts_remaining": 0,
+      "anonymous_allowlist_read": false,
+      "has_authenticated_verifier": true,
+      "direct_authenticated_delete": false,
+      "direct_authenticated_insert": false,
+      "legacy_derivation_preserved": true,
+      "anonymous_function_execution_count": 0
+    }
+  }
+]

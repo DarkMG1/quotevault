@@ -1,6 +1,11 @@
 -- Disposable empty database only; all fixture data and DDL roll back.
 begin;
 do $$ begin
+  if exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+      where n.nspname='public' and (p.proname like 'qv_%' or p.proname in ('get_vault_state','sync_quotes','rotate_vault','initialize_vault'))
+        and has_function_privilege('anon',p.oid,'EXECUTE')) then
+    raise exception 'Supabase default function grants still permit anonymous execution';
+  end if;
   if exists (select 1 from public.quotes) or exists (select 1 from auth.users) then
     raise exception 'Use an empty disposable database for this test';
   end if;

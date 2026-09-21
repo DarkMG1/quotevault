@@ -8,6 +8,9 @@ begin
 end;
 $$;
 
+-- Hosted Supabase grants these explicitly, independently of the PUBLIC role.
+alter default privileges in schema public grant execute on functions to anon, authenticated;
+
 create schema auth;
 create function auth.uid()
 returns uuid language sql stable
