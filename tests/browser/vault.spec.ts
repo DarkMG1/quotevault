@@ -199,3 +199,37 @@ test('a second tab cannot revive access during pending online sign-out', async (
   await second.getByRole('button', { name: 'Sign In', exact: true }).click();
   await unlock(second);
 });
+
+test('reconnecting retries a temporary sync failure without another user action', async ({ page, context }) => {
+  await prepareDevice(page);
+  await context.setOffline(true);
+  await addQuote(page, 'Reconnect retry regression');
+  let attempts = 0;
+  await page.route('**/rest/v1/rpc/sync_quotes', async route => {
+    attempts++;
+    if (attempts === 1) await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ message: 'Temporary outage' }) });
+    else await route.continue();
+  });
+  await context.setOffline(false);
+  await expect.poll(() => localRows(page, 'syncQueue').then(rows => rows.length), { timeout: 12000 }).toBe(0);
+  expect(attempts).toBeGreaterThanOrEqual(2);
+  await expect(page.locator('blockquote').filter({ hasText: 'Reconnect retry regression' })).toHaveCount(1);
+});
+
+test('Sync now is visible and manual retries retain encrypted changes until acknowledgment', async ({ page }) => {
+  await prepareDevice(page);
+  let fail = true;
+  await page.route('**/rest/v1/rpc/sync_quotes', async route => {
+    if (fail) await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ message: 'Temporary outage' }) });
+    else await route.continue();
+  });
+  await addQuote(page, 'Manual sync regression');
+  await expect.poll(() => localRows(page, 'syncQueue').then(rows => rows.length)).toBe(1);
+  expect(JSON.stringify(await localRows(page, 'syncQueue'))).not.toContain('Manual sync regression');
+  fail = false;
+  const sync = page.getByRole('button', { name: 'Sync now', exact: true });
+  await expect(sync).toBeVisible();
+  await sync.click();
+  await expect.poll(() => localRows(page, 'syncQueue').then(rows => rows.length)).toBe(0);
+  await expect(page.getByText(/Last synced/)).toBeVisible();
+});

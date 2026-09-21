@@ -3,7 +3,7 @@ import { webcrypto } from 'node:crypto';
 import { loadModule } from './load-module.mjs';
 
 const load = (path, dependencies, globals) => loadModule(path, dependencies, {
-  crypto: webcrypto, structuredClone, TextEncoder, console: { error() {} }, ...globals,
+  crypto: webcrypto, structuredClone, TextEncoder, AbortController, setTimeout, clearTimeout, console: { error() {} }, ...globals,
 });
 
 function table() {
@@ -23,16 +23,31 @@ function table() {
   };
 }
 
-function setup(reply = args => ({ generation: 'g1', revision: 1, results: args.p_operations.map(op => ({ operation_id: op.operation_id, status: op.quote_id === 'bad' ? 'rejected' : 'ok', error: op.quote_id === 'bad' ? 'denied' : undefined })), quotes: null })) {
+function setup(reply = args => ({ generation: 'g1', revision: 1, results: args.p_operations.map(op => ({ operation_id: op.operation_id, status: op.quote_id === 'bad' ? 'rejected' : 'ok', error: op.quote_id === 'bad' ? 'denied' : undefined })), quotes: null }), { timers } = {}) {
   const db = { quotes: table(), syncQueue: table(), metadata: table(), transaction: async (_mode, ...args) => args.at(-1)() };
   const rpcCalls = [];
+  const rpcSignals = [];
   const navigator = { onLine: true };
-  const supabase = { rpc: async (_name, args) => {
-    rpcCalls.push(args);
-    return { data: await reply(args), error: null };
+  const supabase = { rpc: (_name, args) => {
+    const request = {
+      abortSignal(signal) { request.signal = signal; rpcSignals.push(signal); return request; },
+      then(resolve, reject) {
+        rpcCalls.push(args);
+        return Promise.resolve(reply(args, request.signal)).then(result => resolve(
+          result && typeof result === 'object' && 'data' in result && 'error' in result && 'status' in result
+            ? result
+            : { data: result, error: null }
+        ), reject);
+      }
+    };
+    return request;
   } };
-  const sync = load('src/lib/sync.ts', { './db': { db }, './supabase': { supabase } }, { navigator, window: { addEventListener() {} }, document: { addEventListener() {} } });
-  return { db, sync, rpcCalls, navigator };
+  const clock = timers ? {
+    setTimeout(callback, delay) { timers.push({ callback, delay, cleared: false }); return timers.length - 1; },
+    clearTimeout(id) { if (typeof id === 'number' && timers[id]) timers[id].cleared = true; }
+  } : { setTimeout, clearTimeout };
+  const sync = load('src/lib/sync.ts', { './db': { db }, './supabase': { supabase } }, { navigator, window: { addEventListener() {}, ...clock }, document: { addEventListener() {} } });
+  return { db, sync, rpcCalls, rpcSignals, navigator };
 }
 
 const quote = (id, generation = 'g1') => ({ id, text: 'ciphertext', author: 'cipher-author', context: 'cipher-context', quote_date: '2026-09-20', created_at: '2026-09-20T00:00:00.000Z', user_id: 'u1', vault_generation: generation, sync_status: 'pending' });
@@ -43,7 +58,7 @@ async function enqueue(db, sync, action, value, actor = 'u1', generation = 'g1')
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-function runProvider(db, { userId = 'u1', generation = 'g1', legacyGeneration = null } = {}) {
+function runProvider(db, { userId = 'u1', generation = 'g1', legacyGeneration = null, canSync = true, retry = async () => {} } = {}, { processSyncQueue = async () => {}, timers = [], visibilityState = 'visible', navigator = { onLine: true } } = {}) {
   const states = [];
   const cleanups = [];
   let cursor = 0;
@@ -61,11 +76,11 @@ function runProvider(db, { userId = 'u1', generation = 'g1', legacyGeneration = 
   const { QuotesProvider } = load('src/hooks/useQuotes.tsx', {
     react: React, 'react/jsx-runtime': { jsx: (type, props) => ({ type, props }) },
     'dexie-react-hooks': { useLiveQuery: (_query, _deps, fallback) => fallback },
-    '../lib/db': { db }, '../lib/sync': { cancelSyncRequests() {}, createSyncOperation() {}, enqueueDeleteMutation() {}, processSyncQueue: async () => {} },
+    '../lib/db': { db }, '../lib/sync': { cancelSyncRequests() {}, createSyncOperation() {}, enqueueDeleteMutation() {}, isTransientSyncFailure(error) { return error?.status === 503 || /failed to fetch/i.test(error?.message || ''); }, processSyncQueue },
     '../lib/supabase': { supabase: { channel: () => ({ on() { return this; }, subscribe() { return { unsubscribe: async () => {} }; } }) } },
-    './useAuth': { useAuth: () => ({ user: { id: userId }, canSync: true }) },
+    './useAuth': { useAuth: () => ({ user: { id: userId }, canSync, retry }) },
     './useCrypto': { useCrypto: () => ({ vaultGeneration: generation, legacyVaultGeneration: legacyGeneration, lockVault() {} }) },
-  }, { window: { clearTimeout() {}, setTimeout() {}, addEventListener() {}, removeEventListener() {} }, document: { addEventListener() {}, removeEventListener() {}, visibilityState: 'visible' }, crypto: webcrypto });
+  }, { navigator, window: { clearTimeout(id) { if (typeof id === 'number') timers[id] = undefined; }, setTimeout(callback, delay) { timers.push({ callback, delay }); return timers.length - 1; }, addEventListener() {}, removeEventListener() {} }, document: { addEventListener() {}, removeEventListener() {}, visibilityState }, crypto: webcrypto });
   const render = () => {
     cursor = 0;
     return QuotesProvider({ children: null });
@@ -74,17 +89,75 @@ function runProvider(db, { userId = 'u1', generation = 'g1', legacyGeneration = 
 }
 
 await (async () => {
-  const { db, sync, rpcCalls } = setup();
+  const { db, sync, rpcCalls, rpcSignals } = setup();
   await enqueue(db, sync, 'INSERT', quote('ok'));
   await enqueue(db, sync, 'DELETE', { ...quote('deleted'), text: 'plaintext', author: 'Alice', context: 'secret' });
   await enqueue(db, sync, 'INSERT', quote('bad'));
   await sync.processSyncQueue({ actorId: 'u1', generation: 'g1' });
 
   const sentDelete = rpcCalls[0].p_operations.find(op => op.action === 'DELETE');
+  assert.equal(rpcSignals.length, 1, 'sync RPCs receive an abort signal');
   assert.deepEqual(Object.keys(sentDelete).sort(), ['action', 'actor_id', 'operation_id', 'quote_id', 'vault_generation']);
   assert.equal(db.syncQueue.rows.size, 1, 'a rejected operation persists without blocking acknowledged operations');
   assert.equal([...db.syncQueue.rows.values()][0].quote_id, 'bad');
   assert.equal([...db.syncQueue.rows.values()][0].error, 'denied');
+})();
+
+await (async () => {
+  const { sync } = setup();
+  assert.equal(sync.isTransientSyncFailure({ status: 503 }), true, 'server failures retry');
+  assert.equal(sync.isTransientSyncFailure({ message: 'Failed to fetch' }), true, 'network failures retry');
+  assert.equal(sync.isTransientSyncFailure({ code: '42501', message: 'permission denied' }), false, 'authorization denials never retry');
+  assert.equal(sync.isTransientSyncFailure({ status: 403, message: 'service unavailable' }), false, 'HTTP authorization denials override message heuristics');
+  assert.equal(sync.isTransientSyncFailure({ code: '42501', message: 'failed to fetch' }), false, 'Postgres authorization denials override message heuristics');
+})();
+
+await (async () => {
+  const timers = [];
+  const { db, sync } = setup((_args, signal) => new Promise(resolve => {
+    signal.addEventListener('abort', () => resolve({ data: null, error: { message: 'The operation was aborted.' }, status: 0 }));
+  }), { timers });
+  await enqueue(db, sync, 'INSERT', quote('timeout'));
+  const running = sync.processSyncQueue({ actorId: 'u1', generation: 'g1' });
+  await settle();
+  const timeout = timers.find(timer => timer.delay === 15_000);
+  assert.ok(timeout, 'sync schedules its RPC deadline');
+  timeout.callback();
+  await assert.rejects(running, error => {
+    assert.match(error.message, /Sync timed out/);
+    assert.equal(sync.isTransientSyncFailure(error), true, 'a deadline expiry retries');
+    return true;
+  });
+  assert.equal(timeout.cleared, true, 'the completed timeout is cleared');
+  assert.equal(db.syncQueue.rows.size, 1, 'a timed-out RPC preserves its queued operation');
+})();
+
+await (async () => {
+  const timers = [];
+  let acknowledge;
+  const { db, sync } = setup(args => new Promise(resolve => {
+    acknowledge = () => resolve({ generation: 'g1', revision: 1, results: args.p_operations.map(op => ({ operation_id: op.operation_id, status: 'ok' })), quotes: null });
+  }), { timers });
+  await enqueue(db, sync, 'INSERT', quote('late-ack'));
+  const running = sync.processSyncQueue({ actorId: 'u1', generation: 'g1' });
+  await settle();
+  timers.find(timer => timer.delay === 15_000).callback();
+  await assert.rejects(running, /Sync timed out/);
+  assert.equal(db.syncQueue.rows.size, 1, 'an abort-ignoring request remains pending at the deadline');
+  acknowledge();
+  await settle();
+  assert.equal(db.syncQueue.rows.size, 1, 'a late acknowledgement cannot clear work after the deadline');
+})();
+
+await (async () => {
+  const { db, sync } = setup(() => ({ data: null, error: { message: 'Service unavailable' }, status: 503 }));
+  await enqueue(db, sync, 'INSERT', quote('server-error'));
+  await assert.rejects(sync.processSyncQueue({ actorId: 'u1', generation: 'g1' }), error => {
+    assert.equal(error.status, 503);
+    assert.equal(sync.isTransientSyncFailure(error), true, 'PostgREST 503 responses retry');
+    return true;
+  });
+  assert.equal(db.syncQueue.rows.size, 1, 'a 503 response preserves its queued operation');
 })();
 
 await (async () => {
@@ -238,7 +311,7 @@ await (async () => {
 await (async () => {
   const started = Promise.withResolvers();
   const release = Promise.withResolvers();
-  const { db, sync } = setup(async args => {
+  const { db, sync, rpcSignals } = setup(async args => {
     started.resolve();
     await release.promise;
     return { generation: 'g1', revision: 2, results: args.p_operations.map(op => ({ operation_id: op.operation_id, status: 'ok' })), quotes: [quote('remote')] };
@@ -247,6 +320,7 @@ await (async () => {
   const running = sync.processSyncQueue({ actorId: 'u1', generation: 'g1' });
   await started.promise;
   sync.cancelSyncRequests();
+  assert.equal(rpcSignals[0].aborted, true, 'cancelling sync aborts the active RPC');
   release.resolve();
   await running;
   assert.equal(db.syncQueue.rows.has([...db.syncQueue.rows.keys()][0]), true, 'cancelling a stale request preserves its pending operation');
@@ -335,6 +409,59 @@ await (async () => {
   release.resolve();
   await second;
   assert.equal(calls, 2, 'a refresh requested during a request gets a subsequent synchronization');
+})();
+
+await (async () => {
+  const db = { quotes: table(), syncQueue: table(), metadata: table(), transaction: async (_mode, ...args) => args.at(-1)() };
+  const timers = [];
+  let calls = 0;
+  const provider = runProvider(db, {}, { timers, processSyncQueue: async () => {
+    if (++calls === 1) throw new TypeError('Failed to fetch');
+    return true;
+  } });
+  await settle();
+  await settle();
+  timers.splice(0);
+  await provider.rendered.props.value.refresh();
+  assert.equal(timers[0].delay, 1000, 'a transient sync failure backs off before retrying');
+  timers[0].callback();
+  await settle();
+  await settle();
+  assert.equal(calls, 2, 'the scheduled retry eventually replays the same sync request');
+})();
+
+await (async () => {
+  const db = { quotes: table(), syncQueue: table(), metadata: table(), transaction: async (_mode, ...args) => args.at(-1)() };
+  const timers = [];
+  const provider = runProvider(db, {}, { timers, processSyncQueue: async () => { throw { code: '42501', message: 'permission denied' }; } });
+  await settle();
+  await settle();
+  timers.splice(0);
+  await provider.rendered.props.value.refresh();
+  assert.equal(timers.length, 0, 'authorization failures do not create an automatic retry loop');
+})();
+
+await (async () => {
+  const db = { quotes: table(), syncQueue: table(), metadata: table(), transaction: async (_mode, ...args) => args.at(-1)() };
+  let retries = 0;
+  let syncs = 0;
+  const provider = runProvider(db, { canSync: false, retry: async () => { retries++; } }, { processSyncQueue: async () => { syncs++; } });
+  await settle();
+  await settle();
+  await provider.rendered.props.value.refresh();
+  assert.equal(retries, 1, 'manual refresh retries an unavailable online session');
+  assert.equal(syncs, 0, 'sync waits for session recovery');
+})();
+
+await (async () => {
+  const db = { quotes: table(), syncQueue: table(), metadata: table(), transaction: async (_mode, ...args) => args.at(-1)() };
+  let syncs = 0;
+  const provider = runProvider(db, {}, { navigator: { onLine: false }, processSyncQueue: async () => { syncs++; } });
+  await settle();
+  await settle();
+  await provider.rendered.props.value.refresh();
+  assert.equal(syncs, 0, 'offline refresh skips the remote sync');
+  assert.match(provider.states[2], /Offline/, 'offline refresh explains that changes remain local');
 })();
 
 console.log('sync queue regression tests passed');

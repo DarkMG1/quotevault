@@ -9,11 +9,10 @@ import type { Quote } from '../types';
 import { decryptQuoteForDisplay, getErrorMessage, useModalDialog } from './ui';
 
 export const Feed = () => {
-    const { quotes, loading, initialFetchPending, pendingCount, lastSyncedAt, refresh, deleteQuote, syncError, syncErrors, retrySyncOperation } = useQuotes();
+    const { quotes, loading, isSyncing, initialFetchPending, pendingCount, lastSyncedAt, refresh, deleteQuote, syncError, syncErrors, retrySyncOperation } = useQuotes();
     const { user } = useAuth();
     const { encryptionKey } = useCrypto();
     const [search, setSearch] = useState('');
-    const [isRefreshing, setIsRefreshing] = useState(false);
     const [decryptedQuotes, setDecryptedQuotes] = useState<Quote[] | null>(null);
     const [quoteToDelete, setQuoteToDelete] = useState<Quote | null>(null);
     const [deleteError, setDeleteError] = useState('');
@@ -48,12 +47,6 @@ export const Feed = () => {
         quote.text.toLowerCase().includes(searchTerm) || quote.author.toLowerCase().includes(searchTerm)
     );
 
-    const handleRefresh = async () => {
-        setIsRefreshing(true);
-        await refresh();
-        setTimeout(() => setIsRefreshing(false), 500);
-    };
-
     const confirmDelete = async () => {
         if (!quoteToDelete || isDeleting) return;
         setIsDeleting(true);
@@ -85,8 +78,9 @@ export const Feed = () => {
                     <label htmlFor="quote-search" className="sr-only">Search quotes or authors</label>
                     <input id="quote-search" type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search quotes or authors..." className="w-full bg-slate-800/50 border border-slate-700/50 rounded-xl py-3 pl-10 pr-4 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all text-white placeholder-slate-400" />
                 </div>
-                <button onClick={handleRefresh} disabled={isRefreshing} aria-label="Refresh quotes" className="p-3 bg-slate-800/50 border border-slate-700/50 rounded-xl text-slate-300 hover:text-white transition-colors">
-                    <RefreshCw aria-hidden="true" className={`w-5 h-5 ${isRefreshing ? 'animate-spin text-primary-400' : ''}`} />
+                <button onClick={() => void refresh()} disabled={isSyncing} aria-busy={isSyncing} aria-label="Sync now" className="p-3 inline-flex items-center gap-2 bg-slate-800/50 border border-slate-700/50 rounded-xl text-slate-300 hover:text-white disabled:opacity-50 transition-colors">
+                    <RefreshCw aria-hidden="true" className={`w-5 h-5 ${isSyncing ? 'animate-spin text-primary-400' : ''}`} />
+                    <span className="text-sm">{isSyncing ? 'Syncing…' : 'Sync now'}</span>
                 </button>
             </div>
 

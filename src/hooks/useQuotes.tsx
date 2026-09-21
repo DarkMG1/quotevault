@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
-import { cancelSyncRequests, createSyncOperation, enqueueDeleteMutation, processSyncQueue, type SyncContext } from '../lib/sync';
+import { cancelSyncRequests, createSyncOperation, enqueueDeleteMutation, isTransientSyncFailure, processSyncQueue, type SyncContext } from '../lib/sync';
 import { supabase } from '../lib/supabase';
 import { useAuth } from './useAuth';
 import { useCrypto } from './useCrypto';
@@ -13,6 +13,7 @@ interface QuotesContextValue {
     initialFetchPending: boolean;
     pendingCount: number;
     lastSyncedAt: string | null;
+    isSyncing: boolean;
     addQuote: (text: string, author: string, context?: string, quoteDate?: string) => Promise<void>;
     deleteQuote: (quote: Quote) => Promise<void>;
     refresh: () => Promise<void>;
@@ -25,13 +26,15 @@ const QuotesContext = createContext<QuotesContextValue | null>(null);
 const activeIdentityKey = 'sync-active-identity';
 
 export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
-    const { user, canSync } = useAuth();
+    const { user, canSync, retry: retrySession } = useAuth();
     const { vaultGeneration, legacyVaultGeneration, lockVault } = useCrypto();
     const [initializedIdentity, setInitializedIdentity] = useState<string | null>(null);
     const [lastSync, setLastSync] = useState<{ identity: string; at: string } | null>(null);
     const [syncError, setSyncError] = useState('');
+    const [isSyncing, setIsSyncing] = useState(false);
     const initializedIdentityRef = useRef<string | null>(null);
     const lifecycle = useRef(0);
+    const retry = useRef<{ attempts: number; timer: number | undefined }>({ attempts: 0, timer: undefined });
     const actorId = user?.id;
     const generation = vaultGeneration;
     const context = useMemo<SyncContext | null>(() => actorId && generation ? {
@@ -105,34 +108,65 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
         }
     }, []);
 
-    const refresh = useCallback(async () => {
+    const refresh = useCallback(async function synchronize() {
         if (!context) return;
         const token = lifecycle.current;
         const active = () => lifecycle.current === token;
-        if (!await initialize(context, legacyVaultGeneration, active) || !active()) return;
-        if (!canSync) return;
+        window.clearTimeout(retry.current.timer);
+        retry.current.timer = undefined;
+        setIsSyncing(true);
         try {
+            if (!await initialize(context, legacyVaultGeneration, active) || !active()) return;
+            if (!navigator.onLine) {
+                setSyncError('Offline. Changes are saved on this device and will sync when you reconnect.');
+                return;
+            }
+            if (!canSync) {
+                setSyncError('Restoring your session. Changes remain on this device until synchronization succeeds.');
+                void retrySession();
+                return;
+            }
             const performed = await processSyncQueue(context);
             if (!active()) return;
             setSyncError('');
+            retry.current.attempts = 0;
             if (performed) {
                 const currentIdentity = `${context.actorId}:${context.generation}`;
                 setLastSync({ identity: currentIdentity, at: new Date().toISOString() });
             }
         } catch (error) {
-            if (active()) setSyncError(error instanceof Error ? error.message : 'Unable to synchronize. Changes remain on this device.');
+            if (!active()) return;
+            setSyncError(error instanceof Error ? error.message : 'Unable to synchronize. Changes remain on this device.');
+            if (isTransientSyncFailure(error) && typeof navigator !== 'undefined' && navigator.onLine && document.visibilityState === 'visible') {
+                window.clearTimeout(retry.current.timer);
+                const delay = Math.min(1000 * 2 ** retry.current.attempts++, 30_000);
+                retry.current.timer = window.setTimeout(() => {
+                    retry.current.timer = undefined;
+                    if (active() && navigator.onLine && document.visibilityState === 'visible') void synchronize();
+                }, delay);
+            }
+        } finally {
+            if (active()) setIsSyncing(false);
         }
-    }, [canSync, context, initialize, legacyVaultGeneration]);
+    }, [canSync, context, initialize, legacyVaultGeneration, retrySession]);
 
     useEffect(() => {
         let active = true;
         if (!context) return;
         const currentLifecycle = lifecycle;
+        const currentRetry = retry.current;
         const token = ++currentLifecycle.current;
-        void Promise.resolve().then(() => initialize(context, legacyVaultGeneration, () => active && currentLifecycle.current === token));
+        void Promise.resolve().then(() => {
+            if (!active || currentLifecycle.current !== token) return;
+            setIsSyncing(false);
+            return initialize(context, legacyVaultGeneration, () => active && currentLifecycle.current === token);
+        });
         return () => {
             active = false;
             if (currentLifecycle.current === token) currentLifecycle.current++;
+            window.clearTimeout(currentRetry.timer);
+            currentRetry.timer = undefined;
+            currentRetry.attempts = 0;
             cancelSyncRequests();
         };
     }, [canSync, context, initialize, legacyVaultGeneration]);
@@ -142,6 +176,7 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
         let timer: number | undefined;
         const schedule = () => {
             window.clearTimeout(timer);
+            if (!navigator.onLine || document.visibilityState !== 'visible') return;
             timer = window.setTimeout(() => { void refresh(); }, 150);
         };
         const online = () => schedule();
@@ -199,8 +234,8 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
     }, [context, refresh]);
 
     const lastSyncedAt = lastSync?.identity === identity ? lastSync.at : null;
-    const value = useMemo(() => ({ quotes, loading, initialFetchPending, pendingCount, lastSyncedAt, addQuote, deleteQuote, refresh, syncError, syncErrors, retrySyncOperation }),
-        [quotes, loading, initialFetchPending, pendingCount, lastSyncedAt, addQuote, deleteQuote, refresh, syncError, syncErrors, retrySyncOperation]);
+    const value = useMemo(() => ({ quotes, loading, initialFetchPending, pendingCount, lastSyncedAt, isSyncing, addQuote, deleteQuote, refresh, syncError, syncErrors, retrySyncOperation }),
+        [quotes, loading, initialFetchPending, pendingCount, lastSyncedAt, isSyncing, addQuote, deleteQuote, refresh, syncError, syncErrors, retrySyncOperation]);
     return <QuotesContext.Provider value={value}>{children}</QuotesContext.Provider>;
 };
 

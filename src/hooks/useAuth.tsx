@@ -9,7 +9,7 @@ interface AuthContextValue {
     canSync: boolean;
     signingOut: boolean;
     error: string;
-    retry: () => void;
+    retry: () => Promise<void>;
     signOut: () => Promise<void>;
 }
 
@@ -19,7 +19,7 @@ const AuthContext = createContext<AuthContextValue>({
     canSync: false,
     signingOut: false,
     error: '',
-    retry: () => undefined,
+    retry: async () => {},
     signOut: async () => undefined,
 });
 
@@ -35,10 +35,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const [error, setError] = useState('');
     const mounted = useRef(false);
     const requestEpoch = useRef(0);
+    const retryTimer = useRef<number | undefined>(undefined);
     const signOutRequest = useRef<Promise<void> | null>(null);
 
     const clearLocalAccess = useCallback(() => {
         requestEpoch.current++;
+        window.clearTimeout(retryTimer.current);
         if (localUser.current) clearCachedVaultState(localUser.current.id);
         localUser.current = null;
         setUser(null);
@@ -46,8 +48,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setLoading(false);
     }, []);
 
-    const loadSession = useCallback(async () => {
+    const loadSession = useCallback(async function restoreSession() {
         const epoch = ++requestEpoch.current;
+        window.clearTimeout(retryTimer.current);
         setLoading(!localUser.current);
         setError('');
         if (isLocallySignedOut()) { clearLocalAccess(); return; }
@@ -69,6 +72,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             if (!mounted.current || epoch !== requestEpoch.current) return;
             setCanSync(false);
             if (!isAuthRetryableFetchError(sessionError)) clearLocalAccess();
+            else if (navigator.onLine && document.visibilityState === 'visible') {
+                // The SDK already retries a refresh. Retry later, not on every render.
+                retryTimer.current = window.setTimeout(() => {
+                    if (mounted.current && epoch === requestEpoch.current && !signOutRequest.current) void restoreSession();
+                }, 30000);
+            }
             setError(sessionError instanceof Error ? sessionError.message : 'Unable to restore your session. Retry the connection.');
         } finally {
             if (mounted.current && epoch === requestEpoch.current) setLoading(false);
@@ -122,6 +131,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             // INITIAL_SESSION can be null solely because an offline refresh failed.
             if (event === 'INITIAL_SESSION' && !session && localUser.current) return;
             requestEpoch.current++;
+            window.clearTimeout(retryTimer.current);
             if (!session) { clearLocalAccess(); return; }
             localUser.current = session.user;
             setUser(session.user);
@@ -131,16 +141,23 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         });
 
         const online = () => { void loadSession(); };
-        const offline = () => { requestEpoch.current++; setCanSync(false); setLoading(false); };
+        const offline = () => { requestEpoch.current++; window.clearTimeout(retryTimer.current); setCanSync(false); setLoading(false); };
+        const visible = () => {
+            if (document.visibilityState === 'visible') void loadSession();
+            else window.clearTimeout(retryTimer.current);
+        };
         const storage = (event: StorageEvent) => {
             if (event.key !== localSignOutKey) return;
             if (isLocallySignedOut()) clearLocalAccess();
             else if (!signOutRequest.current) void loadSession();
         };
+        document.addEventListener('visibilitychange', visible);
         window.addEventListener('storage', storage);
         window.addEventListener('online', online);
         window.addEventListener('offline', offline);
         return () => {
+            window.clearTimeout(retryTimer.current);
+            document.removeEventListener('visibilitychange', visible);
             window.removeEventListener('storage', storage);
             window.removeEventListener('online', online);
             window.removeEventListener('offline', offline);

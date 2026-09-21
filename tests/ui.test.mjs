@@ -98,7 +98,7 @@ const authModule = load('src/hooks/useAuth.tsx', {
       },
     },
   },
-}, { navigator: { onLine: true }, window: { addEventListener() {}, removeEventListener() {} } });
+}, { navigator: { onLine: true }, document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} }, window: { addEventListener() {}, removeEventListener() {}, clearTimeout() {} } });
 const renderAuth = () => { authCursor = 0; authModule.AuthProvider({ children: null }); };
 renderAuth();
 const authCleanup = authEffect();
@@ -112,6 +112,48 @@ renderAuth();
 assert.equal(authContext.value.user, newerUser, 'a stale session result cannot overwrite a newer auth event');
 assert.equal(authContext.value.loading, false, 'a newer auth event clears session loading');
 authCleanup?.();
+
+// A failed refresh must recover without needing a second browser online event.
+let recoverEffect;
+let recoverCalls = 0;
+let retryTimer;
+let retryDelay;
+const recoveryListeners = {};
+const recoveryNavigator = { onLine: true };
+const recoveryDocument = { visibilityState: 'visible', addEventListener: (name, fn) => { recoveryListeners[name] = fn; }, removeEventListener() {} };
+const recoveryWindow = {
+  addEventListener: (name, fn) => { recoveryListeners[name] = fn; }, removeEventListener() {},
+  setTimeout: (fn, delay) => { retryTimer = fn; retryDelay = delay; return 1; },
+  clearTimeout: () => { retryTimer = undefined; },
+};
+const recoverModule = load('src/hooks/useAuth.tsx', {
+  react: { ...authReact, useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}], useEffect: effect => { recoverEffect = effect; } },
+  'react/jsx-runtime': { jsx: (type, props) => type(props) },
+  '@supabase/supabase-js': { isAuthRetryableFetchError: error => error?.name === 'AuthRetryableFetchError' },
+  '../lib/vault': { readCachedVaultState: () => ({ verifier: {} }), clearCachedVaultState() {} },
+  '../lib/supabase': {
+    readCachedSessionUser: () => ({ id: 'cached-user' }), clearCachedSession() {}, isLocallySignedOut: () => false, setLocalSignedOut() {}, localSignOutKey: 'test-signout',
+    supabase: { auth: {
+      getSession: async () => {
+        recoverCalls++;
+        return { data: { session: null }, error: { name: 'AuthRetryableFetchError', message: 'Offline' } };
+      },
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
+    } },
+  },
+}, { navigator: recoveryNavigator, document: recoveryDocument, window: recoveryWindow });
+recoverModule.AuthProvider({ children: null });
+const recoverCleanup = recoverEffect();
+await new Promise(setImmediate);
+assert.equal(typeof retryTimer, 'function', 'transient authentication failure schedules recovery');
+assert.equal(retryDelay, 30000, 'SDK retries already back off; do not poll auth rapidly');
+retryTimer();
+await new Promise(setImmediate);
+assert.equal(recoverCalls, 2);
+recoveryDocument.visibilityState = 'hidden';
+recoveryListeners.visibilitychange();
+assert.equal(retryTimer, undefined, 'hidden apps must not spend requests on retry polling');
+recoverCleanup();
 
 const profileDeferred = Promise.withResolvers();
 let profileCalls = 0;

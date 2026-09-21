@@ -14,6 +14,7 @@ const revisionKey = (actorId: string, generation: string) => `sync-revision:${ac
 // JSON encoding and reject legacy entries that cannot fit a conservative batch.
 const MAX_SYNC_BATCH_BYTES = 900 * 1024;
 const MAX_SYNC_OPERATIONS = 50;
+const SYNC_REQUEST_TIMEOUT_MS = 15_000;
 let inFlight: Promise<boolean> | null = null;
 let syncEpoch = 0;
 let activeIdentity = '';
@@ -23,6 +24,20 @@ const queuedRuns = new Map<string, Promise<boolean>>();
 let queueEpoch = 0;
 let syncRequest = 0;
 let lastOperationTime = 0;
+let activeAbortController: AbortController | null = null;
+
+export function isTransientSyncFailure(error: unknown) {
+    if (!error || typeof error !== 'object') return false;
+    const value = error as { status?: unknown; code?: unknown; message?: unknown; name?: unknown };
+    const status = value.status;
+    if (status === 401 || status === 403 || value.code === '42501') return false;
+    if (typeof status === 'number' && (status === 408 || status === 429 || status >= 500)) return true;
+    if (value.name === 'AbortError') return true;
+    const code = typeof value.code === 'string' ? value.code : '';
+    if (/^(08|53)/.test(code)) return true; // PostgreSQL connection or temporary resource failure.
+    const message = typeof value.message === 'string' ? value.message.toLowerCase() : '';
+    return /failed to fetch|networkerror|network request failed|fetch failed|timed out|timeout|temporarily unavailable|service unavailable/.test(message);
+}
 
 function activate(context: SyncContext) {
     const identity = `${context.actorId}:${context.generation}`;
@@ -38,6 +53,8 @@ export async function clearLocalSyncState() {
     syncEpoch++;
     queueEpoch++;
     queuedRuns.clear();
+    activeAbortController?.abort();
+    activeAbortController = null;
     await db.transaction('rw', db.quotes, db.syncQueue, db.metadata, async () => {
         await db.quotes.clear();
         await db.syncQueue.clear();
@@ -50,6 +67,8 @@ export function cancelSyncRequests() {
     syncEpoch++;
     queueEpoch++;
     queuedRuns.clear();
+    activeAbortController?.abort();
+    activeAbortController = null;
 }
 
 export function createSyncOperation(action: 'INSERT' | 'DELETE', quote: Quote, actorId: string, generation: string): SyncQueueItem {
@@ -213,12 +232,30 @@ async function syncBatch(context: SyncContext, epoch: number): Promise<{ more: b
         batchBytes = nextBytes;
     }
     await rejectOversizedOperations(oversized);
-    const { data, error } = await supabase.rpc('sync_quotes', {
-        p_generation: context.generation,
-        p_revision: revision,
-        p_operations: operations
+    const controller = new AbortController();
+    activeAbortController = controller;
+    let timeout: number | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+        timeout = window.setTimeout(() => {
+            controller.abort();
+            reject(new Error('Sync timed out. Changes remain on this device; retrying automatically.'));
+        }, SYNC_REQUEST_TIMEOUT_MS);
     });
-    if (error) throw error;
+    let data: unknown;
+    let error: unknown;
+    let status: number | undefined;
+    try {
+        // Auth restoration can stall before fetch sees the abort signal.
+        ({ data, error, status } = await Promise.race([supabase.rpc('sync_quotes', {
+            p_generation: context.generation,
+            p_revision: revision,
+            p_operations: operations
+        }).abortSignal(controller.signal), deadline]));
+    } finally {
+        window.clearTimeout(timeout);
+        if (activeAbortController === controller) activeAbortController = null;
+    }
+    if (error) throw Object.assign(new Error('Unable to synchronize. Changes remain on this device.'), error, { status });
     if (epoch !== syncEpoch) return { more: false, performed: true };
     const sentIds = new Set(operations.map(operation => operation.operation_id));
     if (!validResponse(data, sentIds)) throw new Error('Invalid sync response.');
