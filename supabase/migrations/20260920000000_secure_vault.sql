@@ -150,6 +150,8 @@ alter table public.quotes alter column vault_generation set not null;
 alter table public.quotes alter column vault_generation drop default;
 alter table public.quotes alter column context drop not null;
 alter table public.quotes alter column quote_date drop not null;
+-- The original deployed schema used text; valid calendar dates keep the same JSON value.
+alter table public.quotes alter column quote_date type date using nullif(quote_date::text, '')::date;
 
 -- A valid encrypted quote supplies an equivalent slow-verification payload.
 -- Leave the old hash in the locked table when initialization is still required.
@@ -237,6 +239,20 @@ begin
   set first_name = excluded.first_name,
       last_name = excluded.last_name;
   return new;
+end;
+$$;
+
+-- Replace the inspected legacy QuoteVault profile hooks, preserving unrelated auth triggers.
+do $$
+begin
+  if exists (select 1 from pg_trigger where tgrelid = 'auth.users'::regclass
+      and tgname = 'on_auth_user_created' and tgfoid = to_regprocedure('public.handle_new_user()')) then
+    drop trigger on_auth_user_created on auth.users;
+  end if;
+  if exists (select 1 from pg_trigger where tgrelid = 'auth.users'::regclass
+      and tgname = 'on_auth_user_updated' and tgfoid = to_regprocedure('public.handle_user_update()')) then
+    drop trigger on_auth_user_updated on auth.users;
+  end if;
 end;
 $$;
 

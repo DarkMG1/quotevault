@@ -12,9 +12,9 @@ where table_schema = 'public'
 order by table_name, ordinal_position;
 ```
 
-`quotes` must contain `id uuid`, `text text`, `author text`, `context text`, `quote_date date`, `created_at timestamptz`, and `user_id uuid`. `profiles` needs `id uuid`, `first_name text`, and `last_name text`; `allowlist` needs `id uuid`, `email text`, and `created_at timestamptz`; `app_settings` needs `key text` and `value text`.
+`quotes` must contain `id uuid`, `text text`, `author text`, `context text`, `quote_date` (date or legacy text containing valid calendar dates), `created_at timestamptz`, and `user_id uuid`. The migration converts legacy text dates to `date`. `profiles` needs `id uuid`, `first_name text`, and `last_name text`; `allowlist` needs `id uuid`, `email text`, and `created_at timestamptz`; `app_settings` needs `key text` and `value text`.
 
-Inspect existing auth triggers before deployment. The migration only replaces its own `qv_*` triggers; preserve any unrelated provisioning hooks after confirming they do not conflict with the new profile upsert.
+Inspect existing auth triggers before deployment. The migration replaces its own `qv_*` triggers and the verified legacy `on_auth_user_created` / `on_auth_user_updated` hooks only when they target `public.handle_new_user()` / `public.handle_user_update()`. Unrelated provisioning hooks are preserved.
 
 ```sql
 select trigger_name, event_manipulation, action_statement
