@@ -6,8 +6,9 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
+      // Prompt mode preserves active drafts until the app explicitly accepts an update.
+      registerType: 'prompt',
+      includeAssets: ['apple-touch-icon.png', 'masked-icon.svg'],
       manifest: {
         name: 'QuoteVault',
         short_name: 'QuoteVault',

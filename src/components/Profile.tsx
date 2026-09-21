@@ -1,15 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
 import { UserCircle, Shield, Loader2, Save, KeyRound } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getErrorMessage } from './ui';
 
 export const Profile = () => {
     const { user } = useAuth();
 
     // Personal Info State
-    const [firstName, setFirstName] = useState('');
-    const [lastName, setLastName] = useState('');
+    const [firstName, setFirstName] = useState(() => user?.user_metadata?.first_name || '');
+    const [lastName, setLastName] = useState(() => user?.user_metadata?.last_name || '');
     const [isSavingInfo, setIsSavingInfo] = useState(false);
     const [infoMessage, setInfoMessage] = useState({ text: '', type: '' });
 
@@ -19,14 +20,6 @@ export const Profile = () => {
     const [confirmPassword, setConfirmPassword] = useState('');
     const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
     const [passwordMessage, setPasswordMessage] = useState({ text: '', type: '' });
-
-    // Initialize state with existing metadata
-    useEffect(() => {
-        if (user) {
-            setFirstName(user.user_metadata?.first_name || '');
-            setLastName(user.user_metadata?.last_name || '');
-        }
-    }, [user]);
 
     const handleUpdateInfo = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -43,8 +36,8 @@ export const Profile = () => {
 
             if (error) throw error;
             setInfoMessage({ text: 'Profile information updated successfully!', type: 'success' });
-        } catch (err: any) {
-            setInfoMessage({ text: err.message || 'Failed to update profile info', type: 'error' });
+        } catch (error: unknown) {
+            setInfoMessage({ text: getErrorMessage(error, 'Failed to update profile info'), type: 'error' });
         } finally {
             setIsSavingInfo(false);
         }
@@ -94,8 +87,8 @@ export const Profile = () => {
             setCurrentPassword('');
             setNewPassword('');
             setConfirmPassword('');
-        } catch (err: any) {
-            setPasswordMessage({ text: err.message || 'Failed to update password', type: 'error' });
+        } catch (error: unknown) {
+            setPasswordMessage({ text: getErrorMessage(error, 'Failed to update password'), type: 'error' });
         } finally {
             setIsUpdatingPassword(false);
         }
@@ -137,8 +130,9 @@ export const Profile = () => {
                 <form onSubmit={handleUpdateInfo} className="space-y-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="space-y-1.5">
-                            <label className="text-sm font-medium text-slate-400 pl-1">First Name</label>
+                            <label htmlFor="profile-first-name" className="text-sm font-medium text-slate-400 pl-1">First Name</label>
                             <input
+                                id="profile-first-name"
                                 type="text"
                                 value={firstName}
                                 onChange={(e) => setFirstName(e.target.value)}
@@ -147,8 +141,9 @@ export const Profile = () => {
                             />
                         </div>
                         <div className="space-y-1.5">
-                            <label className="text-sm font-medium text-slate-400 pl-1">Last Name</label>
+                            <label htmlFor="profile-last-name" className="text-sm font-medium text-slate-400 pl-1">Last Name</label>
                             <input
+                                id="profile-last-name"
                                 type="text"
                                 value={lastName}
                                 onChange={(e) => setLastName(e.target.value)}
@@ -159,8 +154,9 @@ export const Profile = () => {
                     </div>
 
                     <div className="space-y-1.5 pt-2">
-                        <label className="text-sm font-medium text-slate-400 pl-1">Email Address</label>
+                        <label htmlFor="profile-email" className="text-sm font-medium text-slate-400 pl-1">Email Address</label>
                         <input
+                            id="profile-email"
                             type="email"
                             disabled
                             value={user?.email || ''}
@@ -208,10 +204,11 @@ export const Profile = () => {
                     </p>
 
                     <div className="space-y-1.5">
-                        <label className="text-sm font-medium text-slate-400 pl-1">Current Password</label>
+                        <label htmlFor="current-password" className="text-sm font-medium text-slate-400 pl-1">Current Password</label>
                         <div className="relative">
                             <KeyRound className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                             <input
+                                id="current-password"
                                 type="password"
                                 required
                                 value={currentPassword}
@@ -223,10 +220,11 @@ export const Profile = () => {
                     </div>
 
                     <div className="space-y-1.5 pt-4 border-t border-slate-700/50">
-                        <label className="text-sm font-medium text-slate-400 pl-1">New Password</label>
+                        <label htmlFor="new-password" className="text-sm font-medium text-slate-400 pl-1">New Password</label>
                         <div className="relative">
                             <KeyRound className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                             <input
+                                id="new-password"
                                 type="password"
                                 required
                                 value={newPassword}
@@ -238,10 +236,11 @@ export const Profile = () => {
                     </div>
 
                     <div className="space-y-1.5">
-                        <label className="text-sm font-medium text-slate-400 pl-1">Confirm New Password</label>
+                        <label htmlFor="confirm-password" className="text-sm font-medium text-slate-400 pl-1">Confirm New Password</label>
                         <div className="relative">
                             <KeyRound className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                             <input
+                                id="confirm-password"
                                 type="password"
                                 required
                                 value={confirmPassword}

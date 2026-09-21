@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Loader2, Mail, Lock, Quote } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getErrorMessage } from './ui';
 
 export const AuthUI = () => {
     const [loading, setLoading] = useState(false);
@@ -19,18 +20,6 @@ export const AuthUI = () => {
 
         try {
             if (isSignUp) {
-                // 1. Check if the email exists in the allowlist
-                const { data: allowlistEntry, error: allowlistError } = await supabase
-                    .from('allowlist')
-                    .select('email')
-                    .eq('email', email.trim().toLowerCase())
-                    .single();
-
-                if (allowlistError || !allowlistEntry) {
-                    throw new Error('Access Denied: Your email is not on the approved early-access list.');
-                }
-
-                // 2. If valid, proceed with sign up
                 const { error } = await supabase.auth.signUp({
                     email: email.trim(),
                     password,
@@ -44,7 +33,6 @@ export const AuthUI = () => {
 
                 if (error) throw error;
 
-                // 3. Inform user to verify email
                 setLoading(false);
                 setIsSignUp(false);
                 setErrorMsg('Success! Please check your email inbox to verify your account before logging in.');
@@ -56,8 +44,8 @@ export const AuthUI = () => {
                 });
                 if (error) throw error;
             }
-        } catch (err: any) {
-            setErrorMsg(err.message || 'An error occurred during authentication');
+        } catch (error: unknown) {
+            setErrorMsg(getErrorMessage(error, 'An error occurred during authentication'));
         } finally {
             setLoading(false);
         }
@@ -112,7 +100,9 @@ export const AuthUI = () => {
                                     exit={{ opacity: 0, height: 0 }}
                                     className="grid grid-cols-2 gap-4 overflow-hidden"
                                 >
+                                    <label htmlFor="first-name" className="sr-only">First name</label>
                                     <input
+                                        id="first-name"
                                         type="text"
                                         required
                                         value={firstName}
@@ -120,7 +110,9 @@ export const AuthUI = () => {
                                         placeholder="First Name"
                                         className="w-full bg-slate-900/50 border border-slate-700/50 rounded-xl py-3.5 px-4 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500/50 transition-all font-medium"
                                     />
+                                    <label htmlFor="last-name" className="sr-only">Last name</label>
                                     <input
+                                        id="last-name"
                                         type="text"
                                         required
                                         value={lastName}
@@ -136,7 +128,9 @@ export const AuthUI = () => {
                             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                                 <Mail className="w-5 h-5 text-slate-400 group-focus-within:text-primary-400 transition-colors" />
                             </div>
+                            <label htmlFor="auth-email" className="sr-only">Email address</label>
                             <input
+                                id="auth-email"
                                 type="email"
                                 required
                                 value={email}
@@ -150,7 +144,9 @@ export const AuthUI = () => {
                             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                                 <Lock className="w-5 h-5 text-slate-400 group-focus-within:text-primary-400 transition-colors" />
                             </div>
+                            <label htmlFor="auth-password" className="sr-only">Password</label>
                             <input
+                                id="auth-password"
                                 type="password"
                                 required
                                 value={password}
@@ -176,6 +172,7 @@ export const AuthUI = () => {
 
                 <div className="mt-8 text-center">
                     <button
+                        type="button"
                         onClick={() => {
                             setIsSignUp(!isSignUp);
                             setErrorMsg('');
@@ -193,4 +190,3 @@ export const AuthUI = () => {
         </div>
     );
 };
-

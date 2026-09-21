@@ -1,12 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
-import { hashVaultKey } from '../lib/crypto';
+import { createVaultConfig } from '../lib/crypto';
+import { cacheVaultState, parseVaultState } from '../lib/vault';
+import { clearLocalSyncState } from '../lib/sync';
+import { useCrypto } from '../hooks/useCrypto';
 import { ShieldAlert, Users, Plus, Trash2, Loader2, RefreshCw, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export const AdminDashboard = () => {
     const { user } = useAuth();
+    const { vaultGeneration, lockVault } = useCrypto();
+    const isAdmin = user?.email === 'darkmgdevelopment@gmail.com';
     const [allowlist, setAllowlist] = useState<{ id: string, email: string }[]>([]);
     const [newEmail, setNewEmail] = useState('');
     const [loading, setLoading] = useState(true);
@@ -18,10 +23,8 @@ export const AdminDashboard = () => {
     const [vaultConfirm, setVaultConfirm] = useState('');
     const [isWiping, setIsWiping] = useState(false);
     const [wipeErrorMsg, setWipeErrorMsg] = useState('');
-    const [wipeSuccessMsg, setWipeSuccessMsg] = useState('');
 
     const fetchAllowlist = async () => {
-        setLoading(true);
         const { data, error } = await supabase.from('allowlist').select('*').order('email');
         if (error) {
             console.error(error);
@@ -34,8 +37,10 @@ export const AdminDashboard = () => {
     };
 
     useEffect(() => {
-        fetchAllowlist();
-    }, []);
+        // This loads server state asynchronously when the administrator mounts this view.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        if (isAdmin) void fetchAllowlist();
+    }, [isAdmin]);
 
     const handleAddEmail = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -48,8 +53,8 @@ export const AdminDashboard = () => {
             if (error) throw error;
             setNewEmail('');
             await fetchAllowlist();
-        } catch (err: any) {
-            setErrorMsg(err.message || 'Failed to add email');
+        } catch (err) {
+            setErrorMsg(err instanceof Error ? err.message : 'Failed to add email');
         } finally {
             setIsAdding(false);
         }
@@ -60,64 +65,46 @@ export const AdminDashboard = () => {
             const { error } = await supabase.from('allowlist').delete().eq('id', id);
             if (error) throw error;
             setAllowlist(prev => prev.filter(item => item.id !== id));
-        } catch (err: any) {
-            setErrorMsg(err.message || 'Failed to remove email');
+        } catch (err) {
+            setErrorMsg(err instanceof Error ? err.message : 'Failed to remove email');
         }
     };
 
     const handleWipeAndChangeKey = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (isWiping || !vaultGeneration || !user || !isAdmin) return;
         if (vaultConfirm !== 'ERASE EVERYTHING') {
             setWipeErrorMsg('You must type exactly "ERASE EVERYTHING" to confirm.');
             return;
         }
-        if (!vaultKey || vaultKey.length < 4) {
-            setWipeErrorMsg('New Vault Key must be at least 4 characters.');
+        if (vaultKey.length < 12) {
+            setWipeErrorMsg('New Vault Key must be at least 12 characters.');
             return;
         }
 
         setIsWiping(true);
         setWipeErrorMsg('');
-        setWipeSuccessMsg('');
 
         try {
-            const hash = await hashVaultKey(vaultKey);
-
-            // 1. Update the app_settings
-            const { error: settingsError } = await supabase
-                .from('app_settings')
-                .upsert({ key: 'vault_key_hash', value: hash });
-
-            if (settingsError) throw settingsError;
-
-            // 2. Delete all quotes in Supabase 
-            // Ensures deleting all since id will never equal this dummy uuid
-            const { error: deleteError } = await supabase
-                .from('quotes')
-                .delete()
-                .neq('id', '00000000-0000-0000-0000-000000000000');
-
-            if (deleteError) throw deleteError;
-
-            // 3. Delete local quotes
-            const { db } = await import('../lib/db');
-            await db.quotes.clear();
-
+            const config = await createVaultConfig(vaultKey);
+            const { data, error: resetError } = await supabase.rpc('rotate_vault', {
+                p_expected_generation: vaultGeneration, p_kdf: config.kdf, p_verifier: config.verifier,
+            });
+            if (resetError) throw new Error(resetError.message);
+            cacheVaultState(user.id, parseVaultState(data));
+            lockVault();
+            await clearLocalSyncState();
             setVaultKey('');
             setVaultConfirm('');
-            setWipeSuccessMsg('Vault Key changed. Databases wiped. Reloading...');
-
-            // Force reload to kick user to the unlock screen
-            setTimeout(() => window.location.reload(), 2500);
-        } catch (err: any) {
-            setWipeErrorMsg(err.message || 'Failed to change Vault Key');
+        } catch (err) {
+            setWipeErrorMsg(err instanceof Error ? err.message : 'Failed to change Vault Key. Reconnect before retrying.');
         } finally {
             setIsWiping(false);
         }
     };
 
     // Strict access control check
-    if (user?.email !== 'darkmgdevelopment@gmail.com') {
+    if (!isAdmin) {
         return (
             <div className="flex flex-col items-center justify-center min-h-[50vh] text-center p-6 space-y-4">
                 <ShieldAlert className="w-16 h-16 text-red-500" />
@@ -140,7 +127,8 @@ export const AdminDashboard = () => {
                     </div>
                 </div>
                 <button
-                    onClick={fetchAllowlist}
+                    aria-label="Refresh allowlist"
+                    onClick={() => { setLoading(true); void fetchAllowlist(); }}
                     className="p-3 bg-slate-800/50 border border-slate-700/50 rounded-xl text-slate-300 hover:text-white transition-colors"
                 >
                     <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
@@ -156,6 +144,7 @@ export const AdminDashboard = () => {
             {/* Add Form */}
             <form onSubmit={handleAddEmail} className="bg-surface p-5 rounded-2xl border border-slate-700/50 flex space-x-3">
                 <input
+                    aria-label="Email address to allow"
                     type="email"
                     required
                     value={newEmail}
@@ -164,6 +153,7 @@ export const AdminDashboard = () => {
                     className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all"
                 />
                 <button
+                    aria-label="Add email to allowlist"
                     type="submit"
                     disabled={isAdding}
                     className="bg-primary-600 hover:bg-primary-500 disabled:opacity-50 px-6 rounded-xl flex items-center justify-center text-white font-medium transition-colors"
@@ -194,6 +184,7 @@ export const AdminDashboard = () => {
                                 >
                                     <span className="text-slate-200">{item.email}</span>
                                     <button
+                                        aria-label={`Remove ${item.email} from allowlist`}
                                         onClick={() => handleRemoveEmail(item.id)}
                                         className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
                                     >
@@ -228,11 +219,6 @@ export const AdminDashboard = () => {
                         {wipeErrorMsg}
                     </div>
                 )}
-                {wipeSuccessMsg && (
-                    <div className="p-4 bg-green-500/20 border border-green-500/30 text-green-300 rounded-xl text-sm">
-                        {wipeSuccessMsg}
-                    </div>
-                )}
 
                 <form onSubmit={handleWipeAndChangeKey} className="space-y-4 mt-4">
                     <p className="text-sm text-slate-300 leading-relaxed mb-4">
@@ -242,9 +228,12 @@ export const AdminDashboard = () => {
                     </p>
 
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1 uppercase tracking-wider font-semibold">New Group Vault Key</label>
+                        <label htmlFor="new-vault-key" className="block text-xs text-slate-400 mb-1 uppercase tracking-wider font-semibold">New Group Vault Key</label>
                         <input
-                            type="text"
+                            id="new-vault-key"
+                            type="password"
+                            minLength={12}
+                            autoComplete="new-password"
                             required
                             value={vaultKey}
                             onChange={(e) => setVaultKey(e.target.value)}
@@ -254,8 +243,9 @@ export const AdminDashboard = () => {
                     </div>
 
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1 uppercase tracking-wider font-semibold">Confirm Action</label>
+                        <label htmlFor="confirm-vault-reset" className="block text-xs text-slate-400 mb-1 uppercase tracking-wider font-semibold">Confirm Action</label>
                         <input
+                            id="confirm-vault-reset"
                             type="text"
                             required
                             value={vaultConfirm}

@@ -20,4 +20,12 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    files: ['src/hooks/*.tsx'],
+    rules: {
+      'react-refresh/only-export-components': ['warn', {
+        allowExportNames: ['useAuth', 'useCrypto', 'useQuotes'],
+      }],
+    },
+  },
 ])

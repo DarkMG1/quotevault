@@ -20,28 +20,30 @@ const base64ToArrayBuffer = (base64: string): ArrayBuffer => {
     return bytes.buffer;
 };
 
-/**
- * Derives an AES-GCM 256-bit CryptoKey from a user's chosen password
- * Uses a hardcoded salt since this is an offline-first PWA where the salt 
- * cannot be securely fetched prior to decryption.
- */
-export const deriveEncryptionKey = async (password: string): Promise<CryptoKey> => {
+export interface VaultKdf { salt: string; iterations: number }
+// Existing ciphertext must retain its original derivation until an explicit vault reset.
+export const LEGACY_KDF: VaultKdf = { salt: btoa('QuoteVault-FixedSalt-2026'), iterations: 100000 };
+
+export const deriveEncryptionKey = async (password: string, kdf: VaultKdf = LEGACY_KDF): Promise<CryptoKey> => {
+    const salt = base64ToArrayBuffer(kdf.salt);
+    if (salt.byteLength < 16 || salt.byteLength > 64 || !Number.isInteger(kdf.iterations) ||
+        kdf.iterations < 100000 || kdf.iterations > 2000000) {
+        throw new Error('Invalid vault encryption settings.');
+    }
     const encoder = new TextEncoder();
     const keyMaterial = await crypto.subtle.importKey(
         "raw",
         encoder.encode(password),
         { name: "PBKDF2" },
         false,
-        ["deriveBits", "deriveKey"]
+        ["deriveKey"]
     );
-
-    const salt = encoder.encode("QuoteVault-FixedSalt-2026"); // In a real prod environment, this could be user-specific if fetched from a non-e2ee store
 
     return await crypto.subtle.deriveKey(
         {
             name: "PBKDF2",
             salt: salt,
-            iterations: 100000,
+            iterations: kdf.iterations,
             hash: "SHA-256"
         },
         keyMaterial,
@@ -100,21 +102,25 @@ export const decryptData = async (payload: EncryptedPayload, key: CryptoKey): Pr
 
         const decoder = new TextDecoder();
         return decoder.decode(decryptedBuffer);
-    } catch (error) {
-        console.error("Decryption failed. Invalid key or corrupted data.", error);
-        throw new Error("Failed to decrypt generic payload. Invalid vault key.");
+    } catch {
+        throw new Error('Incorrect vault key or damaged encrypted data.');
     }
 };
 
-/**
- * Generates a SHA-256 hash of a string to be used strictly for verification.
- * This allows the server to verify if a Vault Key is correct WITHOUT ever
- * storing the actual decryption key in the database.
- */
-export const hashVaultKey = async (password: string): Promise<string> => {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(password);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+export const createVaultConfig = async (password: string) => {
+    if (password.length < 12) throw new Error('Use a vault passphrase of at least 12 characters.');
+    const kdf = { salt: arrayBufferToBase64(crypto.getRandomValues(new Uint8Array(16)).buffer), iterations: 600000 };
+    const key = await deriveEncryptionKey(password, kdf);
+    return { kdf, verifier: await encryptData(JSON.stringify({ quotevault: 1 }), key), key };
+};
+
+export const unlockWithVerifier = async (password: string, kdf: VaultKdf, verifier: EncryptedPayload) => {
+    const key = await deriveEncryptionKey(password, kdf);
+    const value: unknown = JSON.parse(await decryptData(verifier, key));
+    if (!value || typeof value !== 'object' ||
+        !('quotevault' in value && value.quotevault === 1) &&
+        !('text' in value && typeof value.text === 'string' && 'author' in value && typeof value.author === 'string')) {
+        throw new Error('Invalid vault verification data.');
+    }
+    return key;
 };

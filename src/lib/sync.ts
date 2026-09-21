@@ -1,72 +1,237 @@
 import { db } from './db';
 import { supabase } from './supabase';
-import type { Quote } from '../types';
+import type { Quote, SyncQueueItem } from '../types';
 
-export async function addToSyncQueue(action: 'INSERT' | 'UPDATE' | 'DELETE', payload: Quote) {
-    await db.syncQueue.put({
-        id: payload.id, // Using the same ID to prevent duplication of identical actions
-        action,
-        payload,
-        created_at: new Date().toISOString()
+export interface SyncContext {
+    actorId: string;
+    generation: string;
+    legacyGeneration?: string | null;
+    onGenerationMismatch?: () => void;
+}
+
+const revisionKey = (actorId: string, generation: string) => `sync-revision:${actorId}:${generation}`;
+let inFlight: Promise<void> | null = null;
+let syncEpoch = 0;
+let activeIdentity = '';
+let queuedContext: SyncContext | null = null;
+let lastOperationTime = 0;
+
+function activate(context: SyncContext) {
+    const identity = `${context.actorId}:${context.generation}`;
+    if (activeIdentity !== identity) {
+        activeIdentity = identity;
+        syncEpoch++;
+    }
+    return syncEpoch;
+}
+
+/** Clears the unlocked vault's visible cache and prevents an older request from restoring it. */
+export async function clearLocalSyncState() {
+    syncEpoch++;
+    queuedContext = null;
+    await db.transaction('rw', db.quotes, db.syncQueue, db.metadata, async () => {
+        await db.quotes.clear();
+        await db.syncQueue.clear();
+        await db.metadata.clear();
     });
 }
 
-export async function processSyncQueue() {
-    if (!navigator.onLine) return; // Only process when online
+/** Stops an obsolete request from applying its response without deleting pending data. */
+export function cancelSyncRequests() {
+    syncEpoch++;
+    queuedContext = null;
+}
 
-    const queue = await db.syncQueue.orderBy('created_at').toArray();
+export function createSyncOperation(action: 'INSERT' | 'DELETE', quote: Quote, actorId: string, generation: string): SyncQueueItem {
+    const operation_id = crypto.randomUUID();
+    lastOperationTime = Math.max(Date.now(), lastOperationTime + 1);
+    return {
+        id: operation_id,
+        operation_id,
+        action,
+        quote_id: quote.id,
+        actor_id: actorId,
+        vault_generation: generation,
+        payload: action === 'INSERT' ? { ...quote, vault_generation: generation, sync_status: 'pending' } : undefined,
+        created_at: new Date(lastOperationTime).toISOString(),
+        status: 'pending'
+    };
+}
 
-    if (queue.length === 0) return;
+export async function enqueueDeleteMutation(quote: Quote, context: SyncContext) {
+    const operation = createSyncOperation('DELETE', quote, context.actorId, context.generation);
+    await db.transaction('rw', db.quotes, db.syncQueue, async () => {
+        await db.quotes.delete(quote.id);
+        const superseded = (await db.syncQueue.toArray()).filter(item =>
+            item.quote_id === quote.id && (
+                item.action === 'INSERT' && item.actor_id === context.actorId && item.vault_generation === context.generation ||
+                item.action === 'DELETE' && item.status === 'blocked' && !item.actor_id
+            )
+        );
+        await db.syncQueue.bulkDelete(superseded.map(item => item.id));
+        await db.syncQueue.put(operation);
+    });
+    return operation;
+}
 
+async function adoptLegacyOperations({ actorId, generation, legacyGeneration }: SyncContext) {
+    const queue = await db.syncQueue.toArray();
     for (const item of queue) {
-        try {
-            if (item.action === 'INSERT') {
-                const { error } = await supabase
-                    .from('quotes')
-                    .insert([{
-                        id: item.payload.id,
-                        text: item.payload.text,
-                        author: item.payload.author,
-                        context: item.payload.context,
-                        quote_date: item.payload.quote_date,
-                        created_at: item.payload.created_at,
-                        user_id: item.payload.user_id
-                    }]);
-
-                if (error) throw error;
-            } else if (item.action === 'DELETE') {
-                const { error } = await supabase
-                    .from('quotes')
-                    .delete()
-                    .eq('id', item.payload.id);
-
-                if (error) throw error;
-            }
-            // Add UPDATE logic here if needed later
-
-            // On success, update the local DB to mark as synced and remove from queue
-            if (item.action !== 'DELETE') {
-                await db.quotes.update(item.payload.id, { sync_status: 'synced' });
-            }
-            await db.syncQueue.delete(item.id);
-
-        } catch (err) {
-            console.error('Sync failed for item', item, err);
-            // We will break and retry later to maintain order
-            break;
+        if (item.action !== 'INSERT' || item.vault_generation || item.actor_id !== actorId) continue;
+        if (legacyGeneration === generation && item.payload) {
+            await db.syncQueue.update(item.id, {
+                vault_generation: generation,
+                payload: { ...item.payload, vault_generation: generation },
+                status: 'pending',
+                error: undefined
+            });
+        } else {
+            await db.syncQueue.update(item.id, {
+                status: 'blocked',
+                error: 'Quote was created before this vault generation; re-add it after unlocking.'
+            });
         }
     }
 }
 
-// Set up a listener for when the browser comes online
-window.addEventListener('online', () => {
-    processSyncQueue();
-});
+async function mergeSnapshot(snapshot: Quote[], context: SyncContext) {
+    // Called inside the response transaction so a new local delete cannot be overwritten.
+    const queued = (await db.syncQueue.toArray()).filter(item =>
+        item.actor_id === context.actorId && item.vault_generation === context.generation
+            && (item.action === 'INSERT' || (item.status !== 'rejected' && item.status !== 'blocked'))
+    );
+    const pendingByQuote = new Map(queued.map(item => [item.quote_id, item]));
+    const remoteById = new Map(snapshot.map(quote => [quote.id, { ...quote, sync_status: 'synced' as const }]));
 
-// Also try to sync when the browser regains focus/visibility
-// Mobile browsers often pause JS and miss the 'online' event when backgrounded
-document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-        processSyncQueue();
+    const local = await db.quotes.toArray();
+    for (const quote of local) {
+        if (!remoteById.has(quote.id) && !pendingByQuote.has(quote.id)) await db.quotes.delete(quote.id);
     }
-});
+    for (const quote of remoteById.values()) {
+        if (!pendingByQuote.has(quote.id)) await db.quotes.put(quote);
+    }
+}
+
+async function rejectStaleGeneration(context: SyncContext, epoch: number) {
+    await db.transaction('rw', db.quotes, db.syncQueue, async () => {
+        if (epoch !== syncEpoch) return;
+        await db.quotes.clear();
+        const stale = (await db.syncQueue.toArray()).filter(item => item.vault_generation === context.generation);
+        await db.syncQueue.bulkDelete(stale.map(item => item.id));
+    });
+    if (epoch === syncEpoch) context.onGenerationMismatch?.();
+}
+
+function validQuote(value: unknown, generation: string): value is Quote {
+    if (!value || typeof value !== 'object') return false;
+    const quote = value as Record<string, unknown>;
+    return ['id', 'text', 'author', 'created_at', 'user_id'].every(key => typeof quote[key] === 'string')
+        && quote.vault_generation === generation
+        && (quote.context === undefined || quote.context === null || typeof quote.context === 'string')
+        && (quote.quote_date === undefined || quote.quote_date === null || typeof quote.quote_date === 'string');
+}
+
+function validResponse(data: unknown, sentIds: Set<string>): data is { generation: string; revision: number; results: Array<{ operation_id: string; status: 'ok' | 'rejected'; error?: string }>; quotes: Quote[] | null } {
+    if (!data || typeof data !== 'object') return false;
+    const response = data as Record<string, unknown>;
+    const generation = response.generation;
+    const revision = response.revision;
+    const results = response.results;
+    const quotes = response.quotes;
+    if (typeof generation !== 'string' || typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0 || !Array.isArray(results)) return false;
+    const resultIds = new Set<string>();
+    if (results.length !== sentIds.size || !results.every(result => {
+        if (!result || typeof result !== 'object') return false;
+        const item = result as Record<string, unknown>;
+        if (typeof item.operation_id !== 'string' || !sentIds.has(item.operation_id) || resultIds.has(item.operation_id)) return false;
+        resultIds.add(item.operation_id);
+        return (item.status === 'ok' || item.status === 'rejected') && (item.error === undefined || typeof item.error === 'string');
+    })) return false;
+    return quotes === null || (Array.isArray(quotes) && quotes.every(quote => validQuote(quote, generation)));
+}
+
+async function syncBatch(context: SyncContext, epoch: number) {
+    if (!navigator.onLine) return;
+    await adoptLegacyOperations(context);
+    const revision = (await db.metadata.get(revisionKey(context.actorId, context.generation)))?.value ?? null;
+    const queue = (await db.syncQueue.orderBy('created_at').toArray())
+        .filter(item => item.actor_id === context.actorId && item.vault_generation === context.generation && item.status !== 'rejected' && item.status !== 'blocked')
+        .slice(0, 50);
+    const operations = queue.map(({ operation_id, action, quote_id, actor_id, vault_generation, payload }) => ({
+        operation_id, action, quote_id, actor_id: actor_id!, vault_generation: vault_generation!, ...(action === 'INSERT' ? { payload } : {})
+    }));
+    const { data, error } = await supabase.rpc('sync_quotes', {
+        p_generation: context.generation,
+        p_revision: revision,
+        p_operations: operations
+    });
+    if (error) throw error;
+    if (epoch !== syncEpoch) return;
+    const sentIds = new Set(operations.map(operation => operation.operation_id));
+    if (!validResponse(data, sentIds)) throw new Error('Invalid sync response.');
+    if (data.generation !== context.generation) {
+        await rejectStaleGeneration(context, epoch);
+        return;
+    }
+    let rejectedDelete = false;
+    await db.transaction('rw', db.quotes, db.syncQueue, db.metadata, async () => {
+        if (epoch !== syncEpoch) return;
+        for (const result of data.results) {
+            const item = await db.syncQueue.get(result.operation_id);
+            if (!item || item.operation_id !== result.operation_id) continue;
+            if (result.status === 'ok') {
+                await db.syncQueue.delete(result.operation_id);
+                if (item.action === 'INSERT') {
+                    const later = (await db.syncQueue.toArray()).some(next => next.quote_id === item.quote_id && next.id !== item.id);
+                    if (!later) await db.quotes.update(item.quote_id, { sync_status: 'synced' });
+                }
+            } else {
+                await db.syncQueue.update(item.id, { status: 'rejected', error: result.error || 'The server rejected this change.' });
+                if (item.action === 'INSERT') await db.quotes.update(item.quote_id, { sync_status: 'rejected' });
+                if (item.action === 'DELETE') rejectedDelete = true;
+            }
+        }
+        if (epoch !== syncEpoch) return;
+        if (data.quotes) await mergeSnapshot(data.quotes, context);
+        if (epoch !== syncEpoch) return;
+        if (rejectedDelete && !data.quotes) {
+            // The local row was removed optimistically; force one complete snapshot to restore it.
+            await db.metadata.delete(revisionKey(context.actorId, context.generation));
+        } else {
+            await db.metadata.put({ id: revisionKey(context.actorId, context.generation), value: data.revision });
+        }
+    });
+    if (epoch !== syncEpoch) return;
+    const remaining = (await db.syncQueue.toArray()).some(item =>
+        item.actor_id === context.actorId && item.vault_generation === context.generation && item.status !== 'rejected' && item.status !== 'blocked'
+    );
+    return remaining || (rejectedDelete && !data.quotes);
+}
+
+async function sync(context: SyncContext, epoch: number) {
+    while (epoch === syncEpoch) {
+        const more = await syncBatch(context, epoch);
+        if (!more) return;
+    }
+}
+
+async function withCrossTabLock(run: () => Promise<void>) {
+    // ponytail: one shared vault uses one lock; partition locks if multiple vaults are added.
+    const locks = typeof navigator !== 'undefined' && 'locks' in navigator ? (navigator as Navigator & { locks?: LockManager }).locks : undefined;
+    return locks ? locks.request('quote-vault-sync', run) : run();
+}
+
+export function processSyncQueue(context: SyncContext) {
+    const epoch = activate(context);
+    if (inFlight) {
+        queuedContext = context;
+        return inFlight;
+    }
+    inFlight = withCrossTabLock(() => sync(context, epoch)).finally(() => {
+        inFlight = null;
+        const next = queuedContext;
+        queuedContext = null;
+        if (next) void processSyncQueue(next).catch(() => {});
+    });
+    return inFlight;
+}
