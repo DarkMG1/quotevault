@@ -21,16 +21,19 @@ export function isCiphertextWithinLimit(payload: unknown): payload is { data: st
         && typeof payload.data === 'string' && payload.data.length <= MAX_CIPHERTEXT_DATA_LENGTH;
 }
 
-export function isDecryptedPayload(value: unknown): value is { text: string; author: string; context?: string } {
+export function isDecryptedPayload(value: unknown): value is { text: string; author: string; context?: string; source_sender?: string } {
     if (typeof value !== 'object' || value === null) return false;
     const payload = value as Record<string, unknown>;
     return typeof payload.text === 'string' &&
         typeof payload.author === 'string' &&
-        (payload.context === undefined || typeof payload.context === 'string');
+        (payload.context === undefined || typeof payload.context === 'string') &&
+        (payload.source_sender === undefined || typeof payload.source_sender === 'string');
 }
 
 export async function decryptQuoteForDisplay(quote: Quote, encryptionKey: CryptoKey | null): Promise<Quote> {
-    if (!quote.text.startsWith('$$E2E$$')) return quote;
+    const safeQuote = { ...quote };
+    delete safeQuote.source_sender;
+    if (!quote.text.startsWith('$$E2E$$')) return safeQuote;
     try {
         if (!encryptionKey) throw new Error('No key');
         const bundle: unknown = JSON.parse(quote.text.replace('$$E2E$$', ''));
@@ -38,13 +41,14 @@ export async function decryptQuoteForDisplay(quote: Quote, encryptionKey: Crypto
         const payload: unknown = JSON.parse(plaintextJSON);
         if (!isDecryptedPayload(payload)) throw new Error('Invalid encrypted quote payload');
         return {
-            ...quote,
+            ...safeQuote,
             text: payload.text,
             author: payload.author,
             ...(payload.context === undefined ? {} : { context: payload.context }),
+            ...(payload.source_sender === undefined ? {} : { source_sender: payload.source_sender }),
         };
     } catch {
-        return { ...quote, text: '🔒 Encrypted Payload (Decryption Failed)', author: 'Unknown' };
+        return { ...safeQuote, text: '🔒 Encrypted Payload (Decryption Failed)', author: 'Unknown' };
     }
 }
 

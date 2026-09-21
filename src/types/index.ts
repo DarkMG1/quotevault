@@ -8,6 +8,7 @@ export interface Quote {
     user_id: string;
     vault_generation: string;
     sync_status?: 'synced' | 'pending' | 'rejected'; // Local only flag
+    source_sender?: string; // Display-only: populated solely after decrypting the payload bundle
 }
 
 export interface SyncQueueItem {

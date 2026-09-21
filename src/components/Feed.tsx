@@ -126,6 +126,7 @@ export const Feed = () => {
                                     <div className="text-slate-500 select-none">{new Date(quote.quote_date || quote.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}</div>
                                 </div>
                                 {quote.context && <div className="mt-3 pt-3 border-t border-slate-700/30 text-sm text-slate-400 italic select-text">Context: {quote.context}</div>}
+                                {quote.source_sender && <div className="mt-3 text-sm text-slate-400 select-text">Originally shared by {quote.source_sender}</div>}
                                 {canDelete && <button type="button" onClick={() => { setDeleteError(''); setQuoteToDelete(quote); }} aria-label={`Delete quote by ${quote.author}`} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-red-500/20 px-3 py-2 text-sm font-medium text-red-400 hover:bg-red-500/10">
                                     <Trash2 aria-hidden="true" className="h-4 w-4" /> Delete
                                 </button>}
