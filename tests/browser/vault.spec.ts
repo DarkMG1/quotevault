@@ -23,11 +23,11 @@ async function localRows(page: Page, table: string) {
   }, table);
 }
 
-async function addQuote(page: Page, text: string, sourceSender?: string) {
+async function addQuote(page: Page, text: string) {
   await page.getByRole('button', { name: 'Add quote', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Add Quote', exact: true });
   await dialog.getByLabel('Quote', { exact: true }).fill(text);
-  if (sourceSender) await dialog.getByLabel('Originally shared by').fill(sourceSender);
+  await expect(dialog.getByLabel('Originally shared by')).toHaveCount(0);
   await expect(dialog.getByLabel('Author', { exact: true })).not.toHaveValue('');
   await dialog.getByRole('button', { name: 'Save Quote', exact: true }).click();
   await expect(dialog).not.toBeVisible();
@@ -77,25 +77,24 @@ test('expired-session PWA reload preserves encrypted offline changes and deletio
   await expect(page.getByRole('alert')).toBeVisible();
   await expect(page.locator('blockquote')).toHaveCount(0);
   await unlock(page);
-  await addQuote(page, 'Browser-only secret quote', 'Original Test Sender');
-  await expect(page.getByText('Originally shared by Original Test Sender', { exact: true })).toBeVisible();
+  await addQuote(page, 'Browser-only secret quote');
+  await expect(page.getByText('Originally shared by Demo Tester', { exact: true })).toBeVisible();
   await expect.poll(() => localRows(page, 'syncQueue').then(rows => rows.length)).toBe(1);
   const cached = await localRows(page, 'quotes');
   expect(JSON.stringify(cached)).not.toContain('Browser-only secret quote');
-  expect(JSON.stringify(cached)).not.toContain('Original Test Sender');
-  expect(JSON.stringify(await localRows(page, 'syncQueue'))).not.toContain('Original Test Sender');
+  expect(JSON.stringify(cached)).not.toContain('Demo Tester');
+  expect(JSON.stringify(await localRows(page, 'syncQueue'))).not.toContain('Demo Tester');
   expect(cached.every(row => typeof row.text === 'string' && row.text.startsWith('$$E2E$$'))).toBe(true);
   expect(JSON.stringify(await localRows(page, 'syncQueue'))).not.toContain('Browser-only secret quote');
   const storage = await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }));
   expect(storage).not.toContain('demo-vault-key');
   expect(storage).not.toContain('Browser-only secret quote');
-  expect(storage).not.toContain('Original Test Sender');
 
   await context.setOffline(false);
   await expect.poll(() => localRows(page, 'syncQueue').then(rows => rows.length)).toBe(0);
   await page.reload();
   await unlock(page);
-  await expect(page.getByText('Originally shared by Original Test Sender', { exact: true })).toBeVisible();
+  await expect(page.getByText('Originally shared by Demo Tester', { exact: true })).toBeVisible();
   const card = page.locator('blockquote').filter({ hasText: 'Browser-only secret quote' }).locator('..');
   const remove = card.getByRole('button', { name: /Delete quote by/ });
   await remove.click();

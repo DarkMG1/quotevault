@@ -17,7 +17,6 @@ export const AddQuote = ({ onClose }: AddQuoteProps) => {
     const [text, setText] = useState('');
     const [author, setAuthor] = useState('');
     const [context, setContext] = useState('');
-    const [sourceSender, setSourceSender] = useState('');
     const [quoteDate, setQuoteDate] = useState(localDateInputValue());
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [saveError, setSaveError] = useState('');
@@ -66,6 +65,10 @@ export const AddQuote = ({ onClose }: AddQuoteProps) => {
         setSaveError('');
         try {
             if (isLocked || !encryptionKey) throw new Error('Cannot save: Vault is locked.');
+            const submitter = profiles.find(profile => profile.id === user?.id);
+            const sourceSender = submitter ? authorLabel(submitter) :
+                [user?.user_metadata?.first_name, user?.user_metadata?.last_name].filter(value => typeof value === 'string' && value.trim()).join(' ');
+            if (!user || !sourceSender.trim()) throw new Error('Your name is unavailable. Update your profile before submitting a quote.');
             const payloadToEncrypt = JSON.stringify({ text: text.trim(), author: author.trim(), context: context.trim(), ...(sourceSender.trim() ? { source_sender: sourceSender.trim() } : {}) });
             const encryptedBundle = await encryptData(payloadToEncrypt, encryptionKey);
             if (!isCiphertextWithinLimit(encryptedBundle)) {
@@ -120,11 +123,6 @@ export const AddQuote = ({ onClose }: AddQuoteProps) => {
                 <div>
                     <label htmlFor="quote-context" className="block text-sm font-medium text-slate-300 mb-1">Context <span className="text-slate-500 font-normal">(Optional)</span></label>
                     <input id="quote-context" type="text" value={context} onChange={(e) => setContext(e.target.value)} placeholder="In a letter to a friend, 1945" className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all" />
-                </div>
-
-                <div>
-                    <label htmlFor="quote-source-sender" className="block text-sm font-medium text-slate-300 mb-1">Originally shared by <span className="text-slate-500 font-normal">(Optional)</span></label>
-                    <input id="quote-source-sender" type="text" value={sourceSender} onChange={(e) => setSourceSender(e.target.value)} placeholder="Name from the original message" className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all" />
                 </div>
 
                 <div className="max-w-full overflow-hidden">

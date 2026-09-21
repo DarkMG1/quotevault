@@ -19,6 +19,7 @@ const token = `${Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url'
   sub: user.id, email: user.email, role: 'authenticated', aud: 'authenticated', exp: 9999999999,
 })).toString('base64url')}.test-signature`;
 const quotes = new Map();
+const importReceipts = new Map();
 const bundle = await crypt.encryptData(JSON.stringify({ text: 'A locally generated test quote.', author: 'Demo Tester', context: 'Browser smoke test' }), key);
 quotes.set('33333333-3333-4333-8333-333333333333', { id: '33333333-3333-4333-8333-333333333333',
   text: `$$E2E$$${JSON.stringify(bundle)}`, author: 'ENCRYPTED', context: 'ENCRYPTED', quote_date: '2026-09-20',
@@ -51,6 +52,19 @@ http.createServer(async (req, res) => {
       results.push({ operation_id: operation.operation_id, status: 'ok' });
     }
     response = { generation, revision, results, quotes: body.p_revision === revision ? null : [...quotes.values()] };
+  } else if (path === '/rest/v1/rpc/checked_import') {
+    const operations = body.p_operations || [];
+    const completed = operations.every(op => importReceipts.get(op.operation_id) === JSON.stringify(op));
+    if (body.p_generation !== generation || (body.p_revision !== revision && !completed)) {
+      res.statusCode = 409;
+      response = { code: '40001', message: 'Vault changed; refresh and review the import again' };
+    } else {
+      for (const op of operations) {
+        if (!importReceipts.has(op.operation_id)) { quotes.set(op.quote_id, op.payload); revision++; }
+        importReceipts.set(op.operation_id, JSON.stringify(op));
+      }
+      response = { generation, revision, results: operations.map(op => ({operation_id: op.operation_id, status: 'ok'})), quotes: [...quotes.values()] };
+    }
   } else if (path === '/rest/v1/profiles') response = [{ id: user.id, first_name: 'Demo', last_name: 'Tester' }];
   else if (path === '/rest/v1/allowlist') response = [{ id: user.id, email: user.email }];
   else if (path === '/stats') response = calls;

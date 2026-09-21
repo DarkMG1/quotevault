@@ -1,3 +1,4 @@
+import { ImportQuotes } from './ImportQuotes';
 import { useEffect, useRef, useState } from 'react';
 import { Search, CloudOff, Cloud, RefreshCw, Trash2, X } from 'lucide-react';
 import { useQuotes } from '../hooks/useQuotes';
@@ -12,6 +13,7 @@ export const Feed = () => {
     const { quotes, loading, isSyncing, initialFetchPending, pendingCount, lastSyncedAt, refresh, deleteQuote, syncError, syncErrors, retrySyncOperation } = useQuotes();
     const { user } = useAuth();
     const { encryptionKey } = useCrypto();
+    const [importOpen, setImportOpen] = useState(false);
     const [search, setSearch] = useState('');
     const [decryptedQuotes, setDecryptedQuotes] = useState<Quote[] | null>(null);
     const [quoteToDelete, setQuoteToDelete] = useState<Quote | null>(null);
@@ -72,6 +74,8 @@ export const Feed = () => {
 
     return (
         <div className="px-4 py-6 space-y-6">
+            {importOpen && <ImportQuotes onClose={() => setImportOpen(false)} />}
+            <button className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:text-white" onClick={() => setImportOpen(true)}>Import quotes</button>
             <div className="flex items-center space-x-3">
                 <div className="relative flex-1">
                     <Search aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />

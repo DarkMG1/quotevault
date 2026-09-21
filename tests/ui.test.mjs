@@ -82,7 +82,7 @@ const components = load('src/components/AddQuote.tsx', {
   'framer-motion': { AnimatePresence: 'div', motion: new Proxy({}, { get: (_, key) => key }) },
   'lucide-react': new Proxy({}, { get: (_, key) => key }),
   '../hooks/useQuotes': { useQuotes: () => ({ addQuote: async () => {} }) },
-  '../hooks/useAuth': { useAuth: () => ({ user: null }) },
+  '../hooks/useAuth': { useAuth: () => ({ user: {id: 'user-a', user_metadata: {first_name: 'Grace'}} }) },
   '../hooks/useCrypto': { useCrypto: () => ({ encryptionKey: {}, isLocked: false }) },
   '../lib/crypto': { encryptData: async () => ({}) },
   '../lib/profile-cache': { loadProfiles: async () => [] },
@@ -100,21 +100,21 @@ const find = (node, predicate) => {
 assert.equal(find(addQuoteTree, node => node.type === 'dialog')?.props?.role, 'dialog');
 assert.equal(find(addQuoteTree, node => node.type === 'textarea')?.props?.id, 'quote-text');
 assert.equal(find(addQuoteTree, node => node.type === 'label' && node.props.htmlFor === 'quote-text') !== null, true);
-assert.equal(find(addQuoteTree, node => node.type === 'input' && node.props.id === 'quote-source-sender') !== null, true);
+assert.equal(find(addQuoteTree, node => node.type === 'input' && node.props.id === 'quote-source-sender') !== null, false);
 
 const encryptedInputs = [];
 const submittedQuotes = [];
 let addQuoteState = 0;
 const submitComponents = load('src/components/AddQuote.tsx', {
   react: {
-    useState: initial => [["quote", "Ada", "note", "Grace"][addQuoteState++] ?? initial, () => {}],
+    useState: initial => [["quote", "Ada", "note"][addQuoteState++] ?? initial, () => {}],
     useEffect: () => {},
     useRef: initial => ({ current: initial }),
   },
   'framer-motion': { AnimatePresence: 'div', motion: new Proxy({}, { get: (_, key) => key }) },
   'lucide-react': new Proxy({}, { get: (_, key) => key }),
   '../hooks/useQuotes': { useQuotes: () => ({ addQuote: async (...quote) => { submittedQuotes.push(quote); } }) },
-  '../hooks/useAuth': { useAuth: () => ({ user: null }) },
+  '../hooks/useAuth': { useAuth: () => ({ user: {id: 'user-a', user_metadata: {first_name: 'Grace'}} }) },
   '../hooks/useCrypto': { useCrypto: () => ({ encryptionKey: {}, isLocked: false }) },
   '../lib/crypto': { encryptData: async plaintext => { encryptedInputs.push(plaintext); return { iv: 'iv', data: 'data' }; } },
   '../lib/profile-cache': { loadProfiles: async () => [] },

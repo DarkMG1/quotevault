@@ -1,0 +1,64 @@
+diff --git a/imessage-exporter/src/app/runtime.rs b/imessage-exporter/src/app/runtime.rs
+index 51b27b8..f9f82e0 100644
+--- a/imessage-exporter/src/app/runtime.rs
++++ b/imessage-exporter/src/app/runtime.rs
+@@ -290,6 +290,15 @@ impl Config {
+     /// Resolve a comma-separated participant filter into chat and handle IDs.
+     pub(crate) fn resolve_filtered_handles(&mut self) {
+         if let Some(conversation_filter) = &self.options.conversation_filter {
++            // Local QuoteVault export: never broaden a group name to its participants.
++            if let Some(name) = conversation_filter.strip_prefix("chat-name:") {
++                let ids: BTreeSet<i32> = self.chatrooms.iter()
++                    .filter(|(_, chat)| chat.display_name.as_deref() == Some(name))
++                    .map(|(id, _)| *id).collect();
++                self.options.query_context.selected_handle_ids = None;
++                self.options.query_context.selected_chat_ids = (ids.len() == 1).then_some(ids);
++                return;
++            }
+             let parsed_handle_filter = conversation_filter.split(',').collect::<Vec<&str>>();
+ 
+             let mut included_chatrooms: BTreeSet<i32> = BTreeSet::new();
+@@ -582,6 +591,11 @@ impl Config {
+     // MARK: Startup
+     /// Run diagnostics or export data, depending on the selected options.
+     pub fn start(&self) -> Result<(), RuntimeError> {
++        if self.options.conversation_filter.as_deref().is_some_and(|filter| filter.starts_with("chat-name:"))
++            && self.options.query_context.selected_chat_ids.is_none()
++        {
++            return Err(RuntimeError::InvalidOptions("Expected exactly one conversation with this name; nothing exported.".into()));
++        }
+         if self.options.diagnostic {
+             self.run_diagnostic()?;
+         } else if let Some(export_type) = &self.options.export_type {
+@@ -1298,6 +1312,31 @@ mod chat_filter_tests {
+         app::{contacts::Name, export_type::ExportType},
+     };
+ 
++    #[test]
++    fn exact_chat_name_is_scoped_and_fails_closed() {
++        let mut options = Options::fake_options(ExportType::Txt);
++        options.conversation_filter = Some("chat-name:Example Chat".into());
++        options.query_context.set_start("2020-01-01").unwrap();
++        let mut app = Config::fake_app(options);
++        let make_chat = |name: &str| {
++            let mut chat = super::filename_tests::fake_chat();
++            chat.display_name = Some(name.into());
++            chat
++        };
++        app.chatrooms.insert(42, make_chat("Example Chat"));
++        app.chatrooms.insert(43, make_chat("Other group"));
++        app.resolve_filtered_handles();
++        assert_eq!(app.options.query_context.selected_chat_ids, Some(BTreeSet::from([42])));
++        assert_eq!(app.options.query_context.selected_handle_ids, None);
++        app.chatrooms.remove(&42);
++        app.resolve_filtered_handles();
++        assert!(app.start().is_err(), "missing name must not export other chats even with a date filter");
++        app.chatrooms.insert(42, make_chat("Example Chat"));
++        app.chatrooms.insert(43, make_chat("Example Chat"));
++        app.resolve_filtered_handles();
++        assert!(app.start().is_err(), "ambiguous names must not export either conversation");
++    }
++
+     #[test]
+     fn can_generate_filter_string_multiple() {
+         let mut options = Options::fake_options(ExportType::Html);

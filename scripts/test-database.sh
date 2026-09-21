@@ -18,6 +18,10 @@ psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-fixture.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260920000000_secure_vault.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-security.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260921000000_vault_hardening.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260921010000_browser_timestamps.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922000000_checked_import.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-import.sql
 createdb "$migration_db"
 psql -X -v ON_ERROR_STOP=1 -d "$migration_db" -f tests/database-migration.sql
 createdb "$hardening_db"
