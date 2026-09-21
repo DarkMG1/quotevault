@@ -1,30 +1,10 @@
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
-import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
-import ts from 'typescript';
+import { loadModule } from './load-module.mjs';
 
-const require = createRequire(import.meta.url);
-const root = new URL('../', import.meta.url);
-
-function load(path, dependencies, globals) {
-  const source = readFileSync(new URL(path, root), 'utf8');
-  const { outputText } = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
-    fileName: path,
-  });
-  const exports = {};
-  runInNewContext(outputText, {
-    exports,
-    require: name => dependencies[name] ?? require(name),
-    crypto: webcrypto,
-    structuredClone,
-    console: { error() {} },
-    ...globals,
-  }, { filename: path });
-  return exports;
-}
+const load = (path, dependencies, globals) => loadModule(path, dependencies, {
+  crypto: webcrypto, structuredClone, TextEncoder, console: { error() {} }, ...globals,
+});
 
 function table() {
   const rows = new Map();
@@ -65,12 +45,17 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 
 function runProvider(db, { userId = 'u1', generation = 'g1', legacyGeneration = null } = {}) {
   const states = [];
+  const cleanups = [];
   let cursor = 0;
   const React = {
     createContext: value => ({ value }),
     useContext: context => context.value,
     useState: initial => { const index = cursor++; states[index] ??= initial; return [states[index], value => { states[index] = value; }]; },
-    useEffect: effect => { effect(); },
+    useRef: initial => ({ current: initial }),
+    useEffect: effect => {
+      const cleanup = effect();
+      if (typeof cleanup === 'function') cleanups.push(cleanup);
+    },
     useMemo: callback => callback(), useCallback: callback => callback,
   };
   const { QuotesProvider } = load('src/hooks/useQuotes.tsx', {
@@ -81,8 +66,11 @@ function runProvider(db, { userId = 'u1', generation = 'g1', legacyGeneration = 
     './useAuth': { useAuth: () => ({ user: { id: userId } }) },
     './useCrypto': { useCrypto: () => ({ vaultGeneration: generation, legacyVaultGeneration: legacyGeneration, lockVault() {} }) },
   }, { window: { clearTimeout() {}, setTimeout() {}, addEventListener() {}, removeEventListener() {} }, document: { addEventListener() {}, removeEventListener() {}, visibilityState: 'visible' }, crypto: webcrypto });
-  QuotesProvider({ children: null });
-  return states;
+  const render = () => {
+    cursor = 0;
+    return QuotesProvider({ children: null });
+  };
+  return { states, rendered: render(), render, cleanup: () => cleanups.splice(0).reverse().forEach(cleanup => cleanup()) };
 }
 
 await (async () => {
@@ -97,6 +85,27 @@ await (async () => {
   assert.equal(db.syncQueue.rows.size, 1, 'a rejected operation persists without blocking acknowledged operations');
   assert.equal([...db.syncQueue.rows.values()][0].quote_id, 'bad');
   assert.equal([...db.syncQueue.rows.values()][0].error, 'denied');
+})();
+
+await (async () => {
+  const { db, sync, rpcCalls } = setup();
+  const large = 'a'.repeat(500 * 1024);
+  await enqueue(db, sync, 'INSERT', { ...quote('large-one'), text: large });
+  await enqueue(db, sync, 'INSERT', { ...quote('large-two'), text: large });
+  await sync.processSyncQueue({ actorId: 'u1', generation: 'g1' });
+  assert.deepEqual(rpcCalls.map(call => call.p_operations.length), [1, 1], 'large operations are split before the RPC size limit');
+})();
+
+await (async () => {
+  const { db, sync, rpcCalls } = setup();
+  await db.quotes.put({ ...quote('oversized'), text: 'a'.repeat(901 * 1024) });
+  await enqueue(db, sync, 'INSERT', { ...quote('oversized'), text: 'a'.repeat(901 * 1024) });
+  await enqueue(db, sync, 'INSERT', quote('after-oversized'));
+  await sync.processSyncQueue({ actorId: 'u1', generation: 'g1' });
+  assert.equal(rpcCalls.length, 1, 'an oversized legacy insert does not stall following operations');
+  assert.equal(rpcCalls[0].p_operations[0].quote_id, 'after-oversized');
+  assert.equal([...db.syncQueue.rows.values()].find(item => item.quote_id === 'oversized').status, 'rejected');
+  assert.equal(db.quotes.rows.get('oversized').sync_status, 'rejected');
 })();
 
 await (async () => {
@@ -164,6 +173,32 @@ await (async () => {
   assert.equal(pending.length, 1, 'an in-flight acknowledgement never removes a newer operation');
   assert.equal(pending[0].action, 'DELETE');
   assert.equal(pending[0].payload, undefined);
+})();
+
+await (async () => {
+  const started = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  let calls = 0;
+  const { sync, rpcCalls } = setup(async args => {
+    calls++;
+    if (calls === 1) {
+      started.resolve();
+      await release.promise;
+    }
+    if (calls === 2) throw new Error('second identity failed');
+    return { generation: args.p_generation, revision: 1, results: [], quotes: null };
+  });
+  const first = sync.processSyncQueue({ actorId: 'u1', generation: 'g1' });
+  await started.promise;
+  const second = sync.processSyncQueue({ actorId: 'u2', generation: 'g2' });
+  let secondSettled = false;
+  void second.then(() => { secondSettled = true; }, () => { secondSettled = true; });
+  await settle();
+  assert.equal(secondSettled, false, 'a new identity does not resolve from an older identity RPC');
+  release.resolve();
+  await first;
+  await assert.rejects(second, /second identity failed/);
+  assert.deepEqual(rpcCalls.map(call => call.p_generation), ['g1', 'g2'], 'a new identity runs its own queued RPC');
 })();
 
 await (async () => {
@@ -247,6 +282,59 @@ await (async () => {
   await running;
   assert.equal(db.quotes.rows.has('new-session-cache'), true, 'stale generation cleanup cannot clear a newer session');
   assert.equal(locked, false, 'stale generation cleanup cannot lock a newer session');
+})();
+
+await (async () => {
+  const db = { quotes: table(), syncQueue: table(), metadata: table(), transaction: async (_mode, ...args) => args.at(-1)() };
+  let attempts = 0;
+  db.transaction = async (_mode, ...args) => {
+    attempts++;
+    if (attempts === 1) throw new Error('transient IndexedDB failure');
+    return args.at(-1)();
+  };
+  const provider = runProvider(db);
+  await settle();
+  await provider.rendered.props.value.refresh();
+  await settle();
+  assert.equal(attempts, 2, 'Refresh retries a failed local initialization');
+  assert.equal(provider.states[0], 'u1:g1', 'successful retry marks the current identity ready');
+})();
+
+await (async () => {
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const db = { quotes: table(), syncQueue: table(), metadata: table(), transaction: async (_mode, ...args) => args.at(-1)() };
+  db.transaction = async (_mode, ...args) => {
+    entered.resolve();
+    await release.promise;
+    return args.at(-1)();
+  };
+  const provider = runProvider(db);
+  await entered.promise;
+  provider.cleanup();
+  release.resolve();
+  await settle();
+  await settle();
+  assert.equal(provider.states[0], null, 'an unmounted provider never becomes ready from a deferred initialization');
+  assert.equal(db.metadata.rows.has('sync-active-identity'), false, 'a cancelled initialization cannot mutate shared identity metadata');
+})();
+
+await (async () => {
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  let calls = 0;
+  const { sync } = setup(async () => {
+    if (++calls === 1) { entered.resolve(); await release.promise; }
+    return { generation: 'g1', revision: 1, results: [], quotes: null };
+  });
+  const context = { actorId: 'u1', generation: 'g1' };
+  const first = sync.processSyncQueue(context);
+  await entered.promise;
+  const second = sync.processSyncQueue(context);
+  assert.equal(first, second, 'same-identity callers share the active promise');
+  release.resolve();
+  await second;
+  assert.equal(calls, 2, 'a refresh requested during a request gets a subsequent synchronization');
 })();
 
 console.log('sync queue regression tests passed');

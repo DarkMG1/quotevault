@@ -14,6 +14,13 @@ export function getErrorMessage(error: unknown, fallback: string): string {
             : fallback;
 }
 
+export const MAX_CIPHERTEXT_DATA_LENGTH = 262_144;
+
+export function isCiphertextWithinLimit(payload: unknown): payload is { data: string } {
+    return typeof payload === 'object' && payload !== null && 'data' in payload
+        && typeof payload.data === 'string' && payload.data.length <= MAX_CIPHERTEXT_DATA_LENGTH;
+}
+
 export function isDecryptedPayload(value: unknown): value is { text: string; author: string; context?: string } {
     if (typeof value !== 'object' || value === null) return false;
     const payload = value as Record<string, unknown>;

@@ -1,14 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
 import { webcrypto } from 'node:crypto';
-import ts from 'typescript';
+import { loadModule } from './load-module.mjs';
 
-const source = readFileSync(new URL('../src/lib/crypto.ts', import.meta.url), 'utf8');
-const exports = {};
-runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText,
-  { exports, crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob, console });
+const exports = loadModule('src/lib/crypto.ts', {}, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob, console });
 const { deriveEncryptionKey, encryptData, decryptData } = exports;
 
 test('different vault salts prevent decryption with the same password', async () => {

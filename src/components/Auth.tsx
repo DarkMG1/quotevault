@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Loader2, Mail, Lock, Quote } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { getErrorMessage } from './ui';
 
 export const AuthUI = () => {
@@ -57,12 +56,7 @@ export const AuthUI = () => {
             <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-[100%] bg-primary-600/20 blur-[120px] pointer-events-none" />
             <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[60%] rounded-[100%] bg-purple-600/10 blur-[120px] pointer-events-none" />
 
-            <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                transition={{ duration: 0.4, ease: "easeOut" }}
-                className="w-full max-w-[420px] bg-surface/80 backdrop-blur-xl p-8 sm:p-10 rounded-3xl shadow-2xl shadow-primary-900/20 border border-white/[0.08] relative z-10"
-            >
+            <div className="w-full max-w-[420px] bg-surface/80 backdrop-blur-xl p-8 sm:p-10 rounded-3xl shadow-2xl shadow-primary-900/20 border border-white/[0.08] relative z-10">
                 <div className="flex flex-col items-center mb-10 text-center">
                     <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-purple-500 rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-primary-500/30">
                         <Quote className="w-8 h-8 text-white" />
@@ -75,31 +69,16 @@ export const AuthUI = () => {
                     </p>
                 </div>
 
-                <AnimatePresence mode="wait">
-                    {errorMsg && (
-                        <motion.div
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: 'auto' }}
-                            exit={{ opacity: 0, height: 0 }}
-                            className="mb-6 overflow-hidden"
-                        >
-                            <div className={`p-4 border rounded-xl text-sm text-center ${errorMsg.startsWith('Success') ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
-                                {errorMsg}
-                            </div>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
+                {errorMsg && <div className="mb-6" role={errorMsg.startsWith('Success') ? 'status' : 'alert'} aria-live="polite">
+                    <div className={`p-4 border rounded-xl text-sm text-center ${errorMsg.startsWith('Success') ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
+                        {errorMsg}
+                    </div>
+                </div>}
 
                 <form onSubmit={handleAuth} className="space-y-5">
                     <div className="space-y-4">
-                        <AnimatePresence>
-                            {isSignUp && (
-                                <motion.div
-                                    initial={{ opacity: 0, height: 0 }}
-                                    animate={{ opacity: 1, height: 'auto' }}
-                                    exit={{ opacity: 0, height: 0 }}
-                                    className="grid grid-cols-2 gap-4 overflow-hidden"
-                                >
+                        {isSignUp && (
+                                <div className="grid grid-cols-2 gap-4">
                                     <label htmlFor="first-name" className="sr-only">First name</label>
                                     <input
                                         id="first-name"
@@ -120,9 +99,8 @@ export const AuthUI = () => {
                                         placeholder="Last Name"
                                         className="w-full bg-slate-900/50 border border-slate-700/50 rounded-xl py-3.5 px-4 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500/50 transition-all font-medium"
                                     />
-                                </motion.div>
+                                </div>
                             )}
-                        </AnimatePresence>
 
                         <div className="relative group">
                             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
@@ -160,10 +138,11 @@ export const AuthUI = () => {
                     <button
                         type="submit"
                         disabled={loading}
+                        aria-busy={loading}
                         className="w-full bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-500 hover:to-primary-400 text-white font-semibold py-3.5 rounded-xl shadow-lg shadow-primary-500/25 transition-all flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed hover:-translate-y-0.5"
                     >
                         {loading ? (
-                            <Loader2 className="w-5 h-5 animate-spin" />
+                            <><Loader2 aria-hidden="true" className="w-5 h-5 animate-spin" /><span>{isSignUp ? 'Signing up…' : 'Signing in…'}</span></>
                         ) : (
                             <span>{isSignUp ? 'Sign Up' : 'Sign In'}</span>
                         )}
@@ -186,7 +165,7 @@ export const AuthUI = () => {
                         )}
                     </button>
                 </div>
-            </motion.div>
+            </div>
         </div>
     );
 };

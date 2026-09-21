@@ -3,12 +3,13 @@ import { Search, CloudOff, Cloud, RefreshCw, Trash2, X } from 'lucide-react';
 import { useQuotes } from '../hooks/useQuotes';
 import { useAuth } from '../hooks/useAuth';
 import { useCrypto } from '../hooks/useCrypto';
+import { isAdminUser } from '../lib/access';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Quote } from '../types';
 import { decryptQuoteForDisplay, getErrorMessage, useModalDialog } from './ui';
 
 export const Feed = () => {
-    const { quotes, refresh, deleteQuote, syncError, syncErrors, retrySyncOperation } = useQuotes();
+    const { quotes, loading, initialFetchPending, pendingCount, lastSyncedAt, refresh, deleteQuote, syncError, syncErrors, retrySyncOperation } = useQuotes();
     const { user } = useAuth();
     const { encryptionKey } = useCrypto();
     const [search, setSearch] = useState('');
@@ -21,7 +22,7 @@ export const Feed = () => {
     const deleteDialogRef = useRef<HTMLDialogElement>(null);
     const cancelDeleteRef = useRef<HTMLButtonElement>(null);
     const decryptionRequest = useRef(0);
-    const isAdmin = user?.email === 'darkmgdevelopment@gmail.com';
+    const isAdmin = isAdminUser(user);
 
     useModalDialog(deleteDialogRef, Boolean(quoteToDelete), () => setQuoteToDelete(null), cancelDeleteRef);
 
@@ -40,6 +41,8 @@ export const Feed = () => {
     }, [quotes, encryptionKey]);
 
     const displayQuotes = decryptedQuotes || [];
+    const waitingForInitialSync = initialFetchPending && quotes?.length === 0 && typeof navigator !== 'undefined' && navigator.onLine;
+    const isLoadingFeed = loading || waitingForInitialSync || (quotes !== undefined && decryptedQuotes === null);
     const searchTerm = search.toLowerCase();
     const filteredQuotes = displayQuotes.filter((quote) =>
         quote.text.toLowerCase().includes(searchTerm) || quote.author.toLowerCase().includes(searchTerm)
@@ -88,6 +91,9 @@ export const Feed = () => {
             </div>
 
             {syncRetryError && <p role="alert" className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">{syncRetryError}</p>}
+            {(initialFetchPending || pendingCount > 0 || lastSyncedAt) && <p role="status" aria-live="polite" className="text-xs text-slate-500">
+                {pendingCount > 0 ? `${pendingCount} change${pendingCount === 1 ? '' : 's'} waiting to sync.` : initialFetchPending ? 'Syncing quotes…' : `Last synced ${new Date(lastSyncedAt as string).toLocaleTimeString()}.`}
+            </p>}
             {syncError && <p role="alert" className="rounded-xl border border-orange-500/20 bg-orange-500/10 p-3 text-sm text-orange-200">{syncError}</p>}
             {syncErrors && syncErrors.length > 0 && <div className="space-y-2" role="status">
                 {syncErrors.map((error) => <div key={error.operation_id} className="flex items-center justify-between gap-3 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
@@ -135,7 +141,8 @@ export const Feed = () => {
                 </AnimatePresence>
 
                 {filteredQuotes.length === 0 && displayQuotes.length > 0 && <div className="text-center py-12 text-slate-500">No quotes found matching "{search}"</div>}
-                {displayQuotes.length === 0 && <div className="text-center py-20 px-6"><div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 border border-slate-700"><span className="text-2xl">✍️</span></div><h3 className="text-xl font-medium text-white mb-2">No Quotes Yet</h3><p className="text-slate-400">Be the first to capture a memorable quote!</p></div>}
+                {isLoadingFeed && displayQuotes.length === 0 && <div role="status" aria-live="polite" className="text-center py-20 px-6 text-slate-400"><RefreshCw aria-hidden="true" className="w-8 h-8 animate-spin text-primary-400 mx-auto mb-4" /><p>Loading quotes…</p></div>}
+                {!isLoadingFeed && displayQuotes.length === 0 && <div className="text-center py-20 px-6"><div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 border border-slate-700"><span className="text-2xl">✍️</span></div><h3 className="text-xl font-medium text-white mb-2">No Quotes Yet</h3><p className="text-slate-400">Be the first to capture a memorable quote!</p></div>}
             </div>
 
             <dialog ref={deleteDialogRef} role="dialog" aria-labelledby="delete-quote-title" className="z-50 bg-slate-800 border border-slate-700 p-6 rounded-2xl shadow-xl max-w-sm w-[calc(100%-2rem)] text-white [&::backdrop]:bg-black/60 [&::backdrop]:backdrop-blur-sm">

@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
-import ts from 'typescript';
+import { loadModule } from './load-module.mjs';
 
 const state = { generation: '11111111-1111-4111-8111-111111111111', legacy_generation: null,
   kdf: { salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600000 },
@@ -12,14 +10,11 @@ function setup() {
   const navigator = { onLine: true };
   let calls = 0;
   const network = { result: { data: state, error: null } };
-  const exports = {};
-  runInNewContext(ts.transpileModule(readFileSync(new URL('../src/lib/vault.ts', import.meta.url), 'utf8'),
-    { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, {
-    exports, navigator, atob, localStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) },
-    require: () => ({ supabase: { rpc: async name => {
+  const exports = loadModule('src/lib/vault.ts', {
+    './supabase': { supabase: { rpc: async name => {
       assert.equal(name, 'get_vault_state'); calls++; return network.result;
-    } } }),
-  });
+    } } },
+  }, { navigator, atob, localStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) } });
   return { ...exports, navigator, network, calls: () => calls, stored };
 }
 

@@ -1,22 +1,24 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
+import { isAdminUser, ADMIN_EMAIL } from '../lib/access';
 import { createVaultConfig } from '../lib/crypto';
 import { cacheVaultState, parseVaultState } from '../lib/vault';
 import { clearLocalSyncState } from '../lib/sync';
 import { useCrypto } from '../hooks/useCrypto';
 import { ShieldAlert, Users, Plus, Trash2, Loader2, RefreshCw, AlertTriangle } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { getErrorMessage } from './ui';
 
 export const AdminDashboard = () => {
     const { user } = useAuth();
     const { vaultGeneration, lockVault } = useCrypto();
-    const isAdmin = user?.email === 'darkmgdevelopment@gmail.com';
+    const isAdmin = isAdminUser(user);
     const [allowlist, setAllowlist] = useState<{ id: string, email: string }[]>([]);
     const [newEmail, setNewEmail] = useState('');
     const [loading, setLoading] = useState(true);
     const [isAdding, setIsAdding] = useState(false);
     const [errorMsg, setErrorMsg] = useState('');
+    const [removingId, setRemovingId] = useState<string | null>(null);
 
     // Danger Zone State
     const [vaultKey, setVaultKey] = useState('');
@@ -25,15 +27,16 @@ export const AdminDashboard = () => {
     const [wipeErrorMsg, setWipeErrorMsg] = useState('');
 
     const fetchAllowlist = async () => {
-        const { data, error } = await supabase.from('allowlist').select('*').order('email');
-        if (error) {
-            console.error(error);
-            setErrorMsg('Failed to fetch allowlist. Make sure the table exists.');
-        } else {
+        try {
+            const { data, error } = await supabase.from('allowlist').select('*').order('email');
+            if (error) throw error;
             setAllowlist(data || []);
             setErrorMsg('');
+        } catch (error: unknown) {
+            setErrorMsg(getErrorMessage(error, 'Failed to fetch allowlist. Make sure the table exists.'));
+        } finally {
+            setLoading(false);
         }
-        setLoading(false);
     };
 
     useEffect(() => {
@@ -53,20 +56,25 @@ export const AdminDashboard = () => {
             if (error) throw error;
             setNewEmail('');
             await fetchAllowlist();
-        } catch (err) {
-            setErrorMsg(err instanceof Error ? err.message : 'Failed to add email');
+        } catch (error: unknown) {
+            setErrorMsg(getErrorMessage(error, 'Failed to add email'));
         } finally {
             setIsAdding(false);
         }
     };
 
-    const handleRemoveEmail = async (id: string) => {
+    const handleRemoveEmail = async (id: string, email: string) => {
+        if (removingId || email.trim().toLowerCase() === ADMIN_EMAIL) return;
+        setRemovingId(id);
+        setErrorMsg('');
         try {
             const { error } = await supabase.from('allowlist').delete().eq('id', id);
             if (error) throw error;
             setAllowlist(prev => prev.filter(item => item.id !== id));
-        } catch (err) {
-            setErrorMsg(err instanceof Error ? err.message : 'Failed to remove email');
+        } catch (error: unknown) {
+            setErrorMsg(getErrorMessage(error, 'Failed to remove email'));
+        } finally {
+            setRemovingId(null);
         }
     };
 
@@ -96,8 +104,8 @@ export const AdminDashboard = () => {
             await clearLocalSyncState();
             setVaultKey('');
             setVaultConfirm('');
-        } catch (err) {
-            setWipeErrorMsg(err instanceof Error ? err.message : 'Failed to change Vault Key. Reconnect before retrying.');
+        } catch (error: unknown) {
+            setWipeErrorMsg(getErrorMessage(error, 'Failed to change Vault Key. Reconnect before retrying.'));
         } finally {
             setIsWiping(false);
         }
@@ -136,7 +144,7 @@ export const AdminDashboard = () => {
             </div>
 
             {errorMsg && (
-                <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm">
+                <div role="alert" className="p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm">
                     {errorMsg}
                 </div>
             )}
@@ -173,31 +181,28 @@ export const AdminDashboard = () => {
                     </div>
                 ) : (
                     <ul className="divide-y divide-slate-700/50">
-                        <AnimatePresence>
-                            {allowlist.map((item) => (
-                                <motion.li
+                        {allowlist.map((item) => (
+                                <li
                                     key={item.id}
-                                    initial={{ opacity: 0, height: 0 }}
-                                    animate={{ opacity: 1, height: 'auto' }}
-                                    exit={{ opacity: 0, height: 0 }}
                                     className="p-4 flex items-center justify-between hover:bg-slate-800/30 transition-colors"
                                 >
                                     <span className="text-slate-200">{item.email}</span>
                                     <button
                                         aria-label={`Remove ${item.email} from allowlist`}
-                                        onClick={() => handleRemoveEmail(item.id)}
-                                        className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+                                        onClick={() => void handleRemoveEmail(item.id, item.email)}
+                                        disabled={removingId !== null || item.email.trim().toLowerCase() === ADMIN_EMAIL}
+                                        title={item.email.trim().toLowerCase() === ADMIN_EMAIL ? 'The configured administrator cannot be removed' : undefined}
+                                        className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition-colors"
                                     >
-                                        <Trash2 className="w-4 h-4" />
+                                        {removingId === item.id ? <Loader2 aria-hidden="true" className="w-4 h-4 animate-spin" /> : <Trash2 aria-hidden="true" className="w-4 h-4" />}
                                     </button>
-                                </motion.li>
+                                </li>
                             ))}
                             {allowlist.length === 0 && (
                                 <li className="p-8 text-center text-slate-500">
                                     No emails on the allowlist yet. Everyone will be blocked from signing up.
                                 </li>
                             )}
-                        </AnimatePresence>
                     </ul>
                 )}
             </div>

@@ -6,6 +6,7 @@ import type { VaultState } from '../lib/vault';
 import { supabase } from '../lib/supabase';
 import { Lock, Loader2 } from 'lucide-react';
 import { useAuth } from './useAuth';
+import { isAdminUser } from '../lib/access';
 
 interface CryptoContextType {
     encryptionKey: CryptoKey | null;
@@ -19,7 +20,7 @@ const CryptoContext = createContext<CryptoContextType>({
 });
 
 export const CryptoProvider = ({ children }: { children: ReactNode }) => {
-    const { user } = useAuth();
+    const { user, signOut } = useAuth();
     const [encryptionKey, setEncryptionKey] = useState<CryptoKey | null>(null);
     const [state, setState] = useState<VaultState | null>(null);
     const [password, setPassword] = useState('');
@@ -77,7 +78,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
             if (state.verifier) {
                 key = await unlockWithVerifier(password, state.kdf, state.verifier);
             } else {
-                if (user.email !== 'darkmgdevelopment@gmail.com') throw new Error('The administrator must initialize the vault first.');
+                if (!isAdminUser(user)) throw new Error('The administrator must initialize the vault first.');
                 const config = await createVaultConfig(password);
                 const { data, error: initError } = await supabase.rpc('initialize_vault', {
                     p_expected_generation: state.generation, p_kdf: config.kdf, p_verifier: config.verifier,
@@ -125,9 +126,12 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
                     </button>
                 </form>
                 {error && <button type="button" disabled={busy} onClick={() => { setBusy(true); setError(''); void refreshSettings(); }} className="mt-4 text-primary-400">Retry connection</button>}
-                <button type="button" className="block mx-auto mt-6 text-sm text-slate-400" onClick={async () => {
-                    const { error: signOutError } = await supabase.auth.signOut();
-                    if (signOutError) setError(signOutError.message);
+                <button type="button" disabled={busy} className="block mx-auto mt-6 text-sm text-slate-400 disabled:opacity-50" onClick={async () => {
+                    try {
+                        await signOut();
+                    } catch (cause) {
+                        setError(cause instanceof Error ? cause.message : 'Unable to sign out.');
+                    }
                 }}>Sign out</button>
                 <p className="text-xs text-slate-500 mt-6">Keep the shared key safe. Lost encryption keys cannot be recovered.</p>
             </section>

@@ -1,15 +1,28 @@
 import React, { useState } from 'react';
 import { LogOut, PlusCircle, Quote, ShieldAlert, UserCircle } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { isAdminUser } from '../lib/access';
 import { AddQuote } from './AddQuote';
 import { useAuth } from '../hooks/useAuth';
+import { getErrorMessage } from './ui';
 
 export const Layout = ({ children, currentPath = '' }: { children: React.ReactNode, currentPath?: string }) => {
     const [isAddOpen, setIsAddOpen] = useState(false);
-    const { user } = useAuth();
+    const [isSigningOut, setIsSigningOut] = useState(false);
+    const [signOutError, setSignOutError] = useState('');
+    const { user, signOut } = useAuth();
 
     const handleSignOut = async () => {
-        await supabase.auth.signOut();
+        if (isSigningOut) return;
+        setIsSigningOut(true);
+        setSignOutError('');
+        try {
+            await signOut();
+        } catch (error: unknown) {
+            const message = getErrorMessage(error, 'Unable to sign out. Please try again.');
+            setSignOutError(message);
+        } finally {
+            setIsSigningOut(false);
+        }
     };
 
     return (
@@ -30,7 +43,7 @@ export const Layout = ({ children, currentPath = '' }: { children: React.ReactNo
                     >
                             <UserCircle aria-hidden="true" className="w-5 h-5" />
                     </a>
-                    {user?.email === 'darkmgdevelopment@gmail.com' && (
+                    {isAdminUser(user) && (
                         <a
                             href={currentPath === '#admin' ? '#' : '#admin'}
                             aria-label="Open admin dashboard"
@@ -42,12 +55,15 @@ export const Layout = ({ children, currentPath = '' }: { children: React.ReactNo
                     <button
                         onClick={handleSignOut}
                         aria-label="Sign out"
+                        aria-busy={isSigningOut}
+                        disabled={isSigningOut}
                         className="p-2 text-slate-400 hover:text-red-400 transition-colors rounded-full hover:bg-slate-800"
                     >
                         <LogOut aria-hidden="true" className="w-5 h-5" />
                     </button>
                 </div>
             </header>
+            {signOutError && <p role="alert" className="mx-auto max-w-2xl px-4 pt-3 text-sm text-red-300">{signOutError}</p>}
 
             {/* Main Content */}
             <main className="max-w-2xl mx-auto w-full">
@@ -63,7 +79,7 @@ export const Layout = ({ children, currentPath = '' }: { children: React.ReactNo
                 <PlusCircle aria-hidden="true" className="w-6 h-6" />
             </button>
 
-            {isAddOpen && <AddQuote isOpen onClose={() => setIsAddOpen(false)} />}
+            {isAddOpen && <AddQuote onClose={() => setIsAddOpen(false)} />}
         </div>
     );
 };

@@ -26,7 +26,7 @@ P1 = high priority, affecting confidentiality or core data integrity. P2 = norma
 
 ### S1 — P1: deleting an encrypted quote stores its plaintext on disk
 
-**Location:** [Feed.tsx:58](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/Feed.tsx:58), [useQuotes.tsx:84](/Users/chiragbhat/CLionProjects/QuoteVault/src/hooks/useQuotes.tsx:84), [sync.ts:9](/Users/chiragbhat/CLionProjects/QuoteVault/src/lib/sync.ts:9).
+**Location:** [Feed.tsx:58](../../../src/components/Feed.tsx#L58), [useQuotes.tsx:84](../../../src/hooks/useQuotes.tsx#L84), [sync.ts:9](../../../src/lib/sync.ts#L9).
 
 Feed passes the decrypted display object to `deleteQuote`; the queue saves that entire object as its payload. Reproduce by deleting a quote offline and inspecting `syncQueue`: text, author, and context are readable without the vault key. They remain until successful synchronization, including across sign-out/reload. The error logger can also print the plaintext item after a failed sync.
 
@@ -34,7 +34,7 @@ Feed passes the decrypted display object to `deleteQuote`; the queue saves that 
 
 ### S2 — P1: the server-side vault verifier bypasses the expensive key derivation
 
-**Location:** [crypto.ts:114](/Users/chiragbhat/CLionProjects/QuoteVault/src/lib/crypto.ts:114), [useCrypto.tsx:40](/Users/chiragbhat/CLionProjects/QuoteVault/src/hooks/useCrypto.tsx:40), [Admin.tsx:74](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/Admin.tsx:74).
+**Location:** [crypto.ts:114](../../../src/lib/crypto.ts#L114), [useCrypto.tsx:40](../../../src/hooks/useCrypto.tsx#L40), [Admin.tsx:74](../../../src/components/Admin.tsx#L74).
 
 The verifier is unsalted SHA-256 of the same secret used for encryption. Anyone obtaining that value can test candidate secrets with one SHA-256 each, bypassing PBKDF2's 100,000-iteration cost. The UI permits four-character keys. The local reproduction recovers a synthetic `1234` secret from a short dictionary using the actual `hashVaultKey` function. No real key was accessed or guessed.
 
@@ -42,7 +42,7 @@ The verifier is unsalted SHA-256 of the same secret used for encryption. Anyone 
 
 ### D1 — P1: an acknowledged-late INSERT can block the entire queue indefinitely
 
-**Location:** [sync.ts:26](/Users/chiragbhat/CLionProjects/QuoteVault/src/lib/sync.ts:26), [sync.ts:56](/Users/chiragbhat/CLionProjects/QuoteVault/src/lib/sync.ts:56).
+**Location:** [sync.ts:26](../../../src/lib/sync.ts#L26), [sync.ts:56](../../../src/lib/sync.ts#L56).
 
 Reproduce an INSERT that commits remotely but loses its response. Its queue entry remains. Every retry attempts another ordinary INSERT with the same UUID, receives a duplicate-key error, and breaks before processing later items. One ambiguous network failure can therefore stop all subsequent saves and deletes.
 
@@ -50,7 +50,7 @@ Reproduce an INSERT that commits remotely but loses its response. Its queue entr
 
 ### D2 — P1: finishing an old INSERT can discard a newer DELETE
 
-**Location:** [sync.ts:7](/Users/chiragbhat/CLionProjects/QuoteVault/src/lib/sync.ts:7), [sync.ts:17](/Users/chiragbhat/CLionProjects/QuoteVault/src/lib/sync.ts:17), [sync.ts:51](/Users/chiragbhat/CLionProjects/QuoteVault/src/lib/sync.ts:51).
+**Location:** [sync.ts:7](../../../src/lib/sync.ts#L7), [sync.ts:17](../../../src/lib/sync.ts#L17), [sync.ts:51](../../../src/lib/sync.ts#L51).
 
 The processor snapshots queue entries, waits for remote requests, then unconditionally deletes the queue entry by quote ID. Reproduce by starting a delayed INSERT, going offline, deleting that quote, then allowing the original INSERT response to arrive. The DELETE replaces the pending INSERT, but the old processor removes it as though it were the acknowledged INSERT. The server retains the quote and no deletion remains queued.
 
@@ -58,7 +58,7 @@ The processor snapshots queue entries, waits for remote requests, then unconditi
 
 ### D4 — P1: key rotation leaves old-key uploads active
 
-**Location:** [Admin.tsx:102](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/Admin.tsx:102), [useCrypto.tsx:23](/Users/chiragbhat/CLionProjects/QuoteVault/src/hooks/useCrypto.tsx:23), [AddQuote.tsx:60](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/AddQuote.tsx:60).
+**Location:** [Admin.tsx:102](../../../src/components/Admin.tsx#L102), [useCrypto.tsx:23](../../../src/hooks/useCrypto.tsx#L23), [AddQuote.tsx:60](../../../src/components/AddQuote.tsx#L60).
 
 The wipe clears `db.quotes` but never clears `db.syncQueue`. Reproduce with a pending INSERT, complete a successful wipe, and resume synchronization: the supposedly erased quote is uploaded again using the old encryption key. Separately, other already-unlocked clients keep their old key and can create more old-key quotes because no vault generation is checked. New-key clients cannot decrypt those records.
 
@@ -66,7 +66,7 @@ The wipe clears `db.quotes` but never clears `db.syncQueue`. Reproduce with a pe
 
 ### D5 — P1: a partially failed rotation changes the verifier before the wipe succeeds
 
-**Location:** [Admin.tsx:87](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/Admin.tsx:87).
+**Location:** [Admin.tsx:87](../../../src/components/Admin.tsx#L87).
 
 The settings upsert and quote deletion are separate requests. Reproduce a successful settings update followed by a failed DELETE: the server keeps old-key ciphertext but advertises only the new verifier. The old secret is rejected on unlock, while the new secret cannot decrypt existing quotes. This is an inconsistent state, even though the UI reports the failure.
 
@@ -74,7 +74,7 @@ The settings upsert and quote deletion are separate requests. Reproduce a succes
 
 ### D3 — P2: refresh cannot reconcile deletions and can restore pending deletions
 
-**Location:** [useQuotes.tsx:24](/Users/chiragbhat/CLionProjects/QuoteVault/src/hooks/useQuotes.tsx:24), [useQuotes.tsx:42](/Users/chiragbhat/CLionProjects/QuoteVault/src/hooks/useQuotes.tsx:42).
+**Location:** [useQuotes.tsx:24](../../../src/hooks/useQuotes.tsx#L24), [useQuotes.tsx:42](../../../src/hooks/useQuotes.tsx#L42).
 
 Refresh only calls `bulkPut`. A quote deleted remotely while this client was closed or disconnected remains locally even after an empty successful refresh. In the other direction, deleting locally while offline and refreshing before the DELETE is uploaded restores the remote row as “synced.” Realtime writes also do not consult pending deletion state.
 
@@ -82,7 +82,7 @@ Refresh only calls `bulkPut`. A quote deleted remotely while this client was clo
 
 ### D6 — P2: online saves claim “synced” before any server acknowledgement
 
-**Location:** [useQuotes.tsx:66](/Users/chiragbhat/CLionProjects/QuoteVault/src/hooks/useQuotes.tsx:66), [Feed.tsx:111](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/Feed.tsx:111).
+**Location:** [useQuotes.tsx:66](../../../src/hooks/useQuotes.tsx#L66), [Feed.tsx:111](../../../src/components/Feed.tsx#L111).
 
 Reproduce with `navigator.onLine === true` while Supabase rejects or cannot receive the INSERT. The quote remains queued but is already marked `synced`, so Feed does not warn that it exists only on this device. Browser connectivity is not a successful server write.
 
@@ -90,7 +90,7 @@ Reproduce with `navigator.onLine === true` while Supabase rejects or cannot rece
 
 ### D7 — P2: local data and its queued operation are committed separately
 
-**Location:** [useQuotes.tsx:70](/Users/chiragbhat/CLionProjects/QuoteVault/src/hooks/useQuotes.tsx:70), [useQuotes.tsx:81](/Users/chiragbhat/CLionProjects/QuoteVault/src/hooks/useQuotes.tsx:81).
+**Location:** [useQuotes.tsx:70](../../../src/hooks/useQuotes.tsx#L70), [useQuotes.tsx:81](../../../src/hooks/useQuotes.tsx#L81).
 
 Reproduce a successful local quote write followed by a failed queue write. The quote remains visible but has no upload operation. The equivalent interruption during deletion removes the local quote without scheduling the remote delete. A storage error or termination between the two commits leaves unrecoverable synchronization intent.
 
@@ -98,7 +98,7 @@ Reproduce a successful local quote write followed by a failed queue write. The q
 
 ### O1 — P2: reopening the PWA offline prevents vault access
 
-**Location:** [useCrypto.tsx:40](/Users/chiragbhat/CLionProjects/QuoteVault/src/hooks/useCrypto.tsx:40).
+**Location:** [useCrypto.tsx:40](../../../src/hooks/useCrypto.tsx#L40).
 
 Even with a cached authenticated session and encrypted quotes, reopening resets the in-memory encryption key. Unlock then requires an uncached Supabase settings request. A network error exits before key derivation, so the correct key cannot unlock cached data. This defeats the advertised offline behavior after a reload.
 
@@ -106,7 +106,7 @@ Even with a cached authenticated session and encrypted quotes, reopening resets 
 
 ### O2 — P2: the PWA manifest references missing icons
 
-**Location:** [vite.config.ts:18](/Users/chiragbhat/CLionProjects/QuoteVault/vite.config.ts:18).
+**Location:** [vite.config.ts:18](../../../vite.config.ts#L18).
 
 The generated manifest references `pwa-192x192.png` and `pwa-512x512.png`; neither exists in `public` or the production build. The configured favicon/apple-touch/masked assets are missing too. The app cannot supply its declared install icons. Browser-specific installation consequences were not tested.
 
@@ -114,7 +114,7 @@ The generated manifest references `pwa-192x192.png` and `pwa-512x512.png`; neith
 
 ### U1 — P2: the default quote date uses UTC instead of the user's calendar day
 
-**Location:** [AddQuote.tsx:19](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/AddQuote.tsx:19).
+**Location:** [AddQuote.tsx:19](../../../src/components/AddQuote.tsx#L19).
 
 `toISOString().split('T')[0]` sets September 21 when the local time is September 20 at 9 PM in Detroit. The input can therefore save a quote under tomorrow's date. Its state also survives modal closes, so an app left open across midnight retains the previous initialization date.
 
@@ -122,7 +122,7 @@ The generated manifest references `pwa-192x192.png` and `pwa-512x512.png`; neith
 
 ### U2 — P2: failed creation has no visible error state
 
-**Location:** [AddQuote.tsx:72](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/AddQuote.tsx:72).
+**Location:** [AddQuote.tsx:72](../../../src/components/AddQuote.tsx#L72).
 
 When encryption or local storage rejects, the catch only logs to the console; the form silently stops showing “Saving…”. There is no explanation or recovery instruction. The D7 failure is one concrete route into this catch.
 
@@ -130,7 +130,7 @@ When encryption or local storage rejects, the catch only logs to the console; th
 
 ### U3 — P2: deleting quotes requires a dragging gesture
 
-**Location:** [Feed.tsx:95](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/Feed.tsx:95).
+**Location:** [Feed.tsx:95](../../../src/components/Feed.tsx#L95).
 
 The only control opening delete confirmation is `onDragEnd` on a non-focusable card. Keyboard and assistive-technology users have no equivalent delete action.
 
@@ -138,7 +138,7 @@ The only control opening delete confirmation is `onDragEnd` on a non-focusable c
 
 ### U4 — P2: dialogs lack keyboard focus management and dialog semantics
 
-**Location:** [AddQuote.tsx:90](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/AddQuote.tsx:90), [Feed.tsx:164](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/Feed.tsx:164).
+**Location:** [AddQuote.tsx:90](../../../src/components/AddQuote.tsx#L90), [Feed.tsx:164](../../../src/components/Feed.tsx#L164).
 
 Both dialogs are ordinary divs without dialog naming, modal semantics, initial focus, focus containment/restoration, or Escape handling. Nothing prevents keyboard focus from reaching the obscured page behind them.
 
@@ -146,7 +146,7 @@ Both dialogs are ordinary divs without dialog naming, modal semantics, initial f
 
 ### U5 — P2: core icon controls are unnamed and visible labels are unassociated
 
-**Location:** [Layout.tsx:26](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/Layout.tsx:26), [Layout.tsx:40](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/Layout.tsx:40), [Layout.tsx:55](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/Layout.tsx:55), [AddQuote.tsx:111](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/AddQuote.tsx:111).
+**Location:** [Layout.tsx:26](../../../src/components/Layout.tsx#L26), [Layout.tsx:40](../../../src/components/Layout.tsx#L40), [Layout.tsx:55](../../../src/components/Layout.tsx#L55), [AddQuote.tsx:111](../../../src/components/AddQuote.tsx#L111).
 
 Profile/admin navigation, sign-out, add, refresh, and close controls use icons without accessible text. Several visible form labels have no `htmlFor`/input `id` association. Auth fields rely on placeholders instead of persistent labels.
 
@@ -181,10 +181,10 @@ Dependency advisories are a separate maintenance finding, **B1 (P2)**. Installed
 
 The code is already small. Correctness work is more valuable than a broad refactor.
 
-- `delete:` remove unused `clsx` and `tailwind-merge` direct dependencies; there are no application imports. Replacement: nothing. [package.json:14](/Users/chiragbhat/CLionProjects/QuoteVault/package.json:14)
-- `delete:` remove unused `src/index2.css`, `src/index_test.css`, `src/assets/react.svg`, and empty `src/App.css`. Replacement: existing `src/index.css`. [main.tsx:3](/Users/chiragbhat/CLionProjects/QuoteVault/src/main.tsx:3)
-- `shrink:` stop mounting a data-subscribing AddQuote while closed. The hidden component and Feed each invoke `useQuotes`, duplicating live queries, pulls, and subscription/queue setup. Conditional mounting removes the hidden work; sharing one synchronization lifecycle prevents duplicate work while the modal is open too. [Layout.tsx:62](/Users/chiragbhat/CLionProjects/QuoteVault/src/components/Layout.tsx:62)
-- `yagni:` remove the advertised `UPDATE` queue action until it is implemented. There is no caller today, and the processor would mark such an item synced and delete it without performing a remote update. [sync.ts:5](/Users/chiragbhat/CLionProjects/QuoteVault/src/lib/sync.ts:5)
+- `delete:` remove unused `clsx` and `tailwind-merge` direct dependencies; there are no application imports. Replacement: nothing. [package.json:14](../../../package.json#L14)
+- `delete:` remove unused `src/index2.css`, `src/index_test.css`, `src/assets/react.svg`, and empty `src/App.css`. Replacement: existing `src/index.css`. [main.tsx:3](../../../src/main.tsx#L3)
+- `shrink:` stop mounting a data-subscribing AddQuote while closed. The hidden component and Feed each invoke `useQuotes`, duplicating live queries, pulls, and subscription/queue setup. Conditional mounting removes the hidden work; sharing one synchronization lifecycle prevents duplicate work while the modal is open too. [Layout.tsx:62](../../../src/components/Layout.tsx#L62)
+- `yagni:` remove the advertised `UPDATE` queue action until it is implemented. There is no caller today, and the processor would mark such an item synced and delete it without performing a remote update. [sync.ts:5](../../../src/lib/sync.ts#L5)
 
 net: approximately -6 source/manifest lines and -2 direct dependencies possible from the simple dead-file/dependency removals, excluding lockfile churn. The synchronization lifecycle change is a separate correctness/duplication cleanup, not a reason to introduce a new framework.
 

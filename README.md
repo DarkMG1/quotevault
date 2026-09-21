@@ -1,6 +1,6 @@
 # QuoteVault
 
-A shared, encrypted quote collection at https://quotes.darkmg1.dev. React and Vite provide the installable frontend; Supabase provides authentication, PostgreSQL, and realtime notifications. Nginx serves `/pages/quotevault/dist` on `ssh vps`.
+A shared, encrypted quote collection at https://quotes.darkmg1.dev. React and Vite provide the installable frontend; Supabase provides authentication, PostgreSQL, and realtime notifications. Nginx serves the static bundle. Release, backup, and health-check procedures are in [operations.md](docs/operations.md).
 
 ## Development
 
@@ -14,14 +14,14 @@ npm run lint
 npm run build
 ```
 
-Database setup and SQL regression instructions are in [database-prerequisites.md](docs/database-prerequisites.md). The frontend requires that migration; deploy the database changes before the new bundle.
+Database setup is in [database-prerequisites.md](docs/database-prerequisites.md). Apply all migrations in timestamp order before deploying the corresponding frontend. CI runs application, SQL, and real browser checks. Run `npm run test:database` against an explicitly selected disposable local PostgreSQL server and `npm run test:browser` for the installed-PWA offline flow.
 
 ## Data flow
 
 1. An allowlisted, confirmed Supabase account signs in. The server enforces membership and administrator privileges.
 2. The shared vault passphrase derives an AES-GCM key in the browser. An authenticated ciphertext verifies it; the passphrase and derived key are never sent to Supabase. Existing ciphertext retains its legacy derivation until an explicit administrator reset.
 3. Quote text, author, and context are encrypted. IDs, ownership, dates, and vault generation are metadata. Dexie commits the local quote and its queued operation together.
-4. One `QuotesProvider` synchronizes batches of at most 50 operations through `sync_quotes`. Operation receipts make retries safe. A revision token avoids downloading an unchanged snapshot; a changed snapshot contains the complete shared vault and is reconciled with pending edits.
+4. One `QuotesProvider` synchronizes batches of at most 50 operations and 900 KiB through `sync_quotes`. Operation receipts make retries safe. A revision token avoids downloading an unchanged snapshot; a changed snapshot contains the complete shared vault and is reconciled with pending edits.
 5. The PWA caches the app shell. Public key-derivation metadata, an encrypted verifier, encrypted quotes, and author names are cached for offline use. First use requires a connection and a valid cached account session. Pending changes synchronize while the app is open after connectivity returns.
 
 Administrator vault reset is intentionally destructive: one database transaction changes the generation and verification metadata and removes all quotes. Old clients cannot write into the new generation. Deployment does not invoke this reset.

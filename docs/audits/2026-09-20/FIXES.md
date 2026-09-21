@@ -30,7 +30,7 @@ Deployed to https://quotes.darkmg1.dev on September 21, 2026 (UTC). The Supabase
 
 Production inspection also identified legacy TEXT dates, duplicate profile hooks, and explicit Supabase default function grants. The migration now converts valid dates, replaces the known legacy hooks, and revokes anonymous function execution explicitly. The local fixtures reproduce these conditions.
 
-The original checkout, built assets, environment file, and modified production lockfile are retained at `/pages/quotevault-backup-5798655-20260921T025735Z`. Private database/schema and environment snapshots are retained locally at `/Users/chiragbhat/.local/share/quotevault/backups/20260921T025735Z-m12c9205/`. A rollback must keep the frontend and database compatible; restoring only the old frontend is insufficient. Nginx continues serving `/pages/quotevault/dist`; no other VPS service was changed.
+The original checkout, built assets, environment file, and modified production lockfile are retained at `/pages/quotevault-backup-5798655-20260921T025735Z`. Private database/schema and environment snapshots are retained outside the repository in operator storage. A rollback must keep the frontend and database compatible; restoring only the old frontend is insufficient. Nginx continues serving `/pages/quotevault/dist`; no other VPS service was changed.
 
 ## Validation
 

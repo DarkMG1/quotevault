@@ -1,35 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
-import { createRequire } from 'node:module';
-import ts from 'typescript';
+import { loadModule } from './load-module.mjs';
 
-const root = new URL('../', import.meta.url);
-const require = createRequire(import.meta.url);
-
-function load(path, dependencies = {}, globals = {}) {
-  const source = readFileSync(new URL(path, root), 'utf8');
-  const { outputText } = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      jsx: ts.JsxEmit.ReactJSX,
-      target: ts.ScriptTarget.ES2022,
-    },
-    fileName: path,
-  });
-  const exports = {};
-  runInNewContext(outputText, {
-    exports,
-    require: name => {
-      if (name in dependencies) return dependencies[name];
-      if (name === 'react/jsx-runtime') return require(name);
-      throw new Error(`Unexpected import: ${name}`);
-    },
-    console: { error() {} },
-    ...globals,
-  }, { filename: path });
-  return exports;
-}
+const load = (path, dependencies, globals) => loadModule(path, dependencies, {
+  console: { error() {} }, ...globals,
+});
 
 const ui = load('src/components/ui.ts', {
   react: { useEffect: () => {}, useRef: initial => ({ current: initial }) },
@@ -72,10 +46,12 @@ const components = load('src/components/AddQuote.tsx', {
   '../hooks/useAuth': { useAuth: () => ({ user: null }) },
   '../hooks/useCrypto': { useCrypto: () => ({ encryptionKey: {}, isLocked: false }) },
   '../lib/crypto': { encryptData: async () => ({}) },
-  '../lib/supabase': { supabase: { from: () => ({ select: () => ({ order: async () => ({ data: [], error: null }) }) }) } },
+  '../lib/profile-cache': { loadProfiles: async () => [] },
   './ui': ui,
 });
-const addQuoteTree = components.AddQuote({ isOpen: true, onClose: () => {} });
+const addQuoteTree = components.AddQuote({ onClose: () => {} });
+assert.equal(ui.isCiphertextWithinLimit({ data: 'x'.repeat(262144) }), true);
+assert.equal(ui.isCiphertextWithinLimit({ data: 'x'.repeat(262145) }), false);
 const childrenOf = node => [node?.props?.children].flat(Infinity).filter(Boolean);
 const find = (node, predicate) => {
   if (!node || typeof node !== 'object') return null;
@@ -85,5 +61,76 @@ const find = (node, predicate) => {
 assert.equal(find(addQuoteTree, node => node.type === 'dialog')?.props?.role, 'dialog');
 assert.equal(find(addQuoteTree, node => node.type === 'textarea')?.props?.id, 'quote-text');
 assert.equal(find(addQuoteTree, node => node.type === 'label' && node.props.htmlFor === 'quote-text') !== null, true);
+
+const sessionDeferred = Promise.withResolvers();
+let authEvent;
+let authEffect;
+let authCursor = 0;
+let authContext;
+const authStates = [];
+const authReact = {
+  createContext: initial => {
+    authContext = { value: initial };
+    authContext.Provider = ({ value }) => { authContext.value = value; return null; };
+    return authContext;
+  },
+  useContext: context => context.value,
+  useState: initial => {
+    const index = authCursor++;
+    authStates[index] ??= initial;
+    return [authStates[index], value => { authStates[index] = value; }];
+  },
+  useRef: initial => ({ current: initial }),
+  useCallback: callback => callback,
+  useEffect: effect => { authEffect = effect; },
+};
+const authModule = load('src/hooks/useAuth.tsx', {
+  react: authReact,
+  'react/jsx-runtime': { jsx: (type, props) => type(props) },
+  '../lib/supabase': {
+    supabase: {
+      auth: {
+        getSession: () => sessionDeferred.promise,
+        onAuthStateChange: callback => { authEvent = callback; return { data: { subscription: { unsubscribe() {} } } }; },
+      },
+    },
+  },
+});
+const renderAuth = () => { authCursor = 0; authModule.AuthProvider({ children: null }); };
+renderAuth();
+const authCleanup = authEffect();
+const newerUser = { id: 'new-user', email: 'new@example.invalid' };
+authEvent('SIGNED_IN', { user: newerUser });
+renderAuth();
+sessionDeferred.resolve({ data: { session: { user: { id: 'old-user', email: 'old@example.invalid' } } }, error: null });
+await sessionDeferred.promise;
+await Promise.resolve();
+renderAuth();
+assert.equal(authContext.value.user, newerUser, 'a stale session result cannot overwrite a newer auth event');
+assert.equal(authContext.value.loading, false, 'a newer auth event clears session loading');
+authCleanup?.();
+
+const profileDeferred = Promise.withResolvers();
+let profileCalls = 0;
+const storage = new Map();
+const profileModule = load('src/lib/profile-cache.ts', {
+  './supabase': {
+    supabase: {
+      from: () => ({ select: () => ({ order: () => {
+        profileCalls += 1;
+        return profileCalls === 1 ? profileDeferred.promise : Promise.resolve({ data: [{ id: 'fresh', first_name: 'Fresh', last_name: 'Name' }], error: null });
+      } }) }),
+    },
+  },
+}, {
+  navigator: { onLine: true },
+  localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
+});
+const staleProfiles = profileModule.loadProfiles('profile-user');
+profileModule.clearProfileCache('profile-user');
+profileDeferred.resolve({ data: [{ id: 'stale', first_name: 'Stale', last_name: 'Name' }], error: null });
+await assert.rejects(staleProfiles, /superseded/);
+assert.deepEqual(await profileModule.loadProfiles('profile-user'), [{ id: 'fresh', first_name: 'Fresh', last_name: 'Name' }], 'cache invalidation forces a fresh author request');
+assert.equal(profileCalls, 2);
 
 console.log('ui audit checks passed');

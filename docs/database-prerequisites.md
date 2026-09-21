@@ -25,7 +25,7 @@ order by trigger_name;
 
 It preserves every quote. If a valid legacy `$$E2E$$` quote exists, its encrypted bundle becomes the verifier and the exposed `vault_key_hash` row is removed. If none exists, the old hash remains inaccessible behind RLS until an administrator calls `initialize_vault`. That function permits pre-existing plaintext quotes because it only rejects encrypted ones; decide whether those rows must be removed or migrated before initialization.
 
-Run [tests/database.sql](/Users/chiragbhat/CLionProjects/QuoteVault/tests/database.sql) only in a disposable Supabase project after the migration. It always rolls back, but several assertions deliberately expect the test vault to contain exactly one quote.
+Run [tests/database.sql](../tests/database.sql) only in a disposable Supabase project after the migration. It always rolls back, but several assertions deliberately expect the test vault to contain exactly one quote.
 
 Local PostgreSQL 17 verification, using an empty disposable database:
 

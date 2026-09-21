@@ -23,3 +23,16 @@ dist-ssr
 *.sln
 *.sw?
 .env
+
+# Credentials, database exports, and local browser artifacts
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.dump
+*.backup
+playwright-report/
+test-results/
+__pycache__/
+*.pyc

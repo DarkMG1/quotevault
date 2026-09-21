@@ -20,7 +20,7 @@ function UpdateNotice() {
 }
 
 const ProtectedRoute = () => {
-  const { user, loading } = useAuth();
+  const { user, loading, error, retry } = useAuth();
   const [currentPath, setCurrentPath] = useState(window.location.hash);
 
   useEffect(() => {
@@ -38,7 +38,13 @@ const ProtectedRoute = () => {
   }
 
   if (!user) {
-    return <AuthUI />;
+    return <>
+      {error && <div role="alert" className="fixed inset-x-4 top-4 z-[70] mx-auto max-w-xl rounded-xl border border-red-500/30 bg-red-950/90 p-4 text-red-200 shadow-xl">
+        <p>{error}</p>
+        <button type="button" onClick={() => void retry()} className="mt-3 rounded-lg bg-red-500/20 px-3 py-2 text-sm font-medium hover:bg-red-500/30">Retry connection</button>
+      </div>}
+      <AuthUI />
+    </>;
   }
 
   return (

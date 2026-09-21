@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
+import { clearProfileCache } from '../lib/profile-cache';
 import { UserCircle, Shield, Loader2, Save, KeyRound } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { getErrorMessage } from './ui';
 
 export const Profile = () => {
@@ -35,6 +35,7 @@ export const Profile = () => {
             });
 
             if (error) throw error;
+            if (user?.id) clearProfileCache(user.id);
             setInfoMessage({ text: 'Profile information updated successfully!', type: 'success' });
         } catch (error: unknown) {
             setInfoMessage({ text: getErrorMessage(error, 'Failed to update profile info'), type: 'error' });
@@ -108,24 +109,15 @@ export const Profile = () => {
             </div>
 
             {/* Personal Information Card */}
-            <motion.div
-                initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
-                className="bg-surface/80 backdrop-blur-xl border border-slate-700/50 rounded-3xl p-6 sm:p-8"
-            >
+            <div className="bg-surface/80 backdrop-blur-xl border border-slate-700/50 rounded-3xl p-6 sm:p-8">
                 <div className="flex items-center space-x-2 mb-6">
                     <UserCircle className="w-5 h-5 text-primary-400" />
                     <h3 className="text-lg font-semibold text-white">Personal Information</h3>
                 </div>
 
-                <AnimatePresence>
-                    {infoMessage.text && (
-                        <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
-                            <div className={`mb-6 p-4 rounded-xl text-sm border ${infoMessage.type === 'success' ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
-                                {infoMessage.text}
-                            </div>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
+                {infoMessage.text && <div className={`mb-6 p-4 rounded-xl text-sm border ${infoMessage.type === 'success' ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`} role={infoMessage.type === 'success' ? 'status' : 'alert'} aria-live="polite">
+                    {infoMessage.text}
+                </div>}
 
                 <form onSubmit={handleUpdateInfo} className="space-y-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -176,27 +168,18 @@ export const Profile = () => {
                         </button>
                     </div>
                 </form>
-            </motion.div>
+            </div>
 
             {/* Security Card */}
-            <motion.div
-                initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
-                className="bg-surface/80 backdrop-blur-xl border border-slate-700/50 rounded-3xl p-6 sm:p-8"
-            >
+            <div className="bg-surface/80 backdrop-blur-xl border border-slate-700/50 rounded-3xl p-6 sm:p-8">
                 <div className="flex items-center space-x-2 mb-6">
                     <Shield className="w-5 h-5 text-primary-400" />
                     <h3 className="text-lg font-semibold text-white">Security</h3>
                 </div>
 
-                <AnimatePresence>
-                    {passwordMessage.text && (
-                        <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
-                            <div className={`mb-6 p-4 rounded-xl text-sm border ${passwordMessage.type === 'success' ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
-                                {passwordMessage.text}
-                            </div>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
+                {passwordMessage.text && <div className={`mb-6 p-4 rounded-xl text-sm border ${passwordMessage.type === 'success' ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`} role={passwordMessage.type === 'success' ? 'status' : 'alert'} aria-live="polite">
+                    {passwordMessage.text}
+                </div>}
 
                 <form onSubmit={handleUpdatePassword} className="space-y-4">
                     <p className="text-sm text-slate-400 mb-6 leading-relaxed">
@@ -262,7 +245,7 @@ export const Profile = () => {
                         </button>
                     </div>
                 </form>
-            </motion.div>
+            </div>
         </div>
     );
 };

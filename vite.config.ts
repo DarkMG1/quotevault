@@ -37,9 +37,6 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
-        // The background sync plugin will be registered manually in a custom service worker, 
-        // or we can just use the provided sw.js from vite-pwa and inject custom sync logic.
-        // For simplicity now, caching common files.
       }
     })
   ]
