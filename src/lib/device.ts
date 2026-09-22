@@ -46,6 +46,24 @@ export async function enrollmentFingerprint(input: { accountId: string; publicKe
 }
 export const computeEnrollmentFingerprint = enrollmentFingerprint;
 
+const ENROLLMENT_CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+const ENROLLMENT_CODE_PREFIX = new TextEncoder().encode('quotevault/enrollment-code/v1\0');
+
+export async function formatEnrollmentCode(fingerprint: string): Promise<string> {
+    if (!base64urlBytes(fingerprint, 32)) invalid('Invalid enrollment fingerprint.');
+    const encoded = `${fingerprint.replace(/-/g, '+').replace(/_/g, '/')}${'==='.slice((fingerprint.length + 3) % 4)}`;
+    const fingerprintBytes = new Uint8Array(base64ToArrayBuffer(encoded));
+    const input = new Uint8Array(ENROLLMENT_CODE_PREFIX.length + fingerprintBytes.length);
+    input.set(ENROLLMENT_CODE_PREFIX);
+    input.set(fingerprintBytes, ENROLLMENT_CODE_PREFIX.length);
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input));
+    let value = 0n;
+    for (const byte of digest.slice(0, 5)) value = (value << 8n) | BigInt(byte);
+    let code = '';
+    for (let shift = 35n; shift >= 0n; shift -= 5n) code += ENROLLMENT_CODE_ALPHABET[Number((value >> shift) & 31n)];
+    return `${code.slice(0, 4)}-${code.slice(4)}`;
+}
+
 export interface RequestDeviceInput { deviceId: string; ownerId: string; label: string; publicJwk: JsonWebKey; publicKeyFingerprint: string; tokenDigest: string; protectionMode: 'passkey-prf' | 'remembered'; protection: Record<string, unknown>; encryptedPrivateBundle: EnvelopeCiphertext; requestKind: 'first' | 'additional' | 'recovery' }
 export interface DeviceRequest { requestId: string; ownerId: string; requestKind: 'first' | 'additional' | 'recovery'; label: string; publicJwk: JsonWebKey; publicKeyFingerprint: string; authorizationTokenDigest: string; enrollmentFingerprint: string; protectionMode: 'passkey-prf' | 'remembered'; protection: Record<string, unknown>; expiresAt: string }
 
