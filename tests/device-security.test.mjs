@@ -67,15 +67,16 @@ test('passkey unlock requires a PRF result and accepts a local challenge offline
   await assert.rejects(setup({ navigatorValue: { credentials: { get: async () => null } } }).api.unlockPasskey(protection), /Passkey/i);
 });
 
-test('passkey registration uses a fresh Edge challenge, fixed RP, UV, and PRF result', async () => {
+test('passkey registration uses an Edge challenge bound to its purpose, fixed RP, UV, and PRF result', async () => {
   const calls = [];
   const credential = { rawId: Uint8Array.from([1, 2, 3]).buffer, getClientExtensionResults: () => ({ prf: { enabled: true, results: { first: new Uint8Array(32).buffer } } }) };
-  const { api } = setup({ edgeReply: () => ({ challenge: fingerprint }), navigatorValue: { credentials: { create: async options => { calls.push(options); return credential; }, get: async () => credential } } });
+  const { api } = setup({ edgeReply: (_name, input) => ({ purpose: input.body.purpose, challenge: fingerprint }), navigatorValue: { credentials: { create: async options => { calls.push(options); return credential; }, get: async () => credential } } });
   const result = await api.registerPasskey({ userId: accountId, userName: 'member@example.com', displayName: 'Member' });
   assert.equal(result.rpId, 'quotes.darkmg1.dev');
   assert.equal(calls[0].publicKey.authenticatorSelection.userVerification, 'required');
   assert.equal(calls[0].publicKey.attestation, 'none');
-  await assert.rejects(setup({ edgeReply: () => ({ challenge: fingerprint }), navigatorValue: { credentials: { create: async () => null } } }).api.registerPasskey({ userId: accountId, userName: 'member@example.com', displayName: 'Member' }), /Passkey/i);
+  await assert.rejects(setup({ edgeReply: () => ({ purpose: 'restoration', challenge: fingerprint }) }).api.webauthnChallenge('registration'), /challenge/i);
+  await assert.rejects(setup({ edgeReply: () => ({ purpose: 'registration', challenge: fingerprint }), navigatorValue: { credentials: { create: async () => null } } }).api.registerPasskey({ userId: accountId, userName: 'member@example.com', displayName: 'Member' }), /Passkey/i);
 });
 
 test('recovery contracts bind IDs and reject malformed secret-bearing responses', async () => {
@@ -85,4 +86,13 @@ test('recovery contracts bind IDs and reject malformed secret-bearing responses'
   assert.equal((await api.completeRecovery({ challengeId: deviceId, response: token })).generation, generation);
   assert.equal((await api.activateRecoveredDevice({ challengeId: deviceId, transitionToken: token, requestId: deviceId, enrollmentFingerprint: fingerprint, generation, wrappedKey: 'A'.repeat(512) })).deviceId, deviceId);
   await assert.rejects(setup({ edgeReply: () => ({ ...begin, token: token }) }).api.beginRecovery(), /recovery/i);
+});
+
+test('recovery key RPC binds the public key fingerprint and response identifiers', async () => {
+  const pair = await webcrypto.subtle.generateKey({ name: 'RSA-OAEP', modulusLength: 3072, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['encrypt', 'decrypt']);
+  const publicJwk = await webcrypto.subtle.exportKey('jwk', pair.publicKey);
+  const { api } = setup({ rpcReply: () => ({ recovery_key_id: accountId, generation }) });
+  await assert.rejects(api.createRecoveryKey({ recoveryKeyId: accountId, publicJwk, publicKeyFingerprint: `B${fingerprint.slice(1)}`, encryptedPrivateKey: bundle, kdf: { version: 1, salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600000 }, generation, wrappedKey: 'A'.repeat(512), deviceId, token }), /recovery/i);
+  const mismatched = setup({ rpcReply: () => ({ recovery_key_id: deviceId, generation }) });
+  await assert.rejects(mismatched.api.createRecoveryKey({ recoveryKeyId: accountId, publicJwk, publicKeyFingerprint: fingerprint, encryptedPrivateKey: bundle, kdf: { version: 1, salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600000 }, generation, wrappedKey: 'A'.repeat(512), deviceId, token }), /recovery/i);
 });
