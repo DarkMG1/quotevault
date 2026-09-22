@@ -65,6 +65,15 @@ test('approval completion renews and verifies its lease before fetching the wrap
   assert.deepEqual(calls.filter(([name]) => name === 'renew' || name === 'complete_device').map(([name]) => name), ['renew', 'complete_device']);
 });
 
+test('only a first enrollment persists the safe recovery-setup gate marker', async () => {
+  const first = setup();
+  await first.api.prepareDeviceEnrollment({ accountId, label: 'Browser', requestKind: 'first', protectionMode: 'remembered', protection: { version: 1, mode: 'remembered' } });
+  assert.equal(first.states.get(accountId).recoverySetupRequired, true);
+  const additional = setup();
+  await additional.api.prepareDeviceEnrollment({ accountId, label: 'Browser', requestKind: 'additional', protectionMode: 'remembered', protection: { version: 1, mode: 'remembered' } });
+  assert.equal('recoverySetupRequired' in additional.states.get(accountId), false);
+});
+
 test('passkey unlock requires a PRF result and accepts a local challenge offline', async () => {
   const calls = [];
   const credential = { rawId: Uint8Array.from([1, 2, 3]).buffer, getClientExtensionResults: () => ({ prf: { results: { first: new Uint8Array(32).buffer } } }) };

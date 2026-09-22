@@ -130,6 +130,13 @@ const initial = { accountId: accountA, deviceId, publicKeyFingerprint: digest, p
   assert.equal(JSON.stringify(deviceState.rows.get(accountA)).includes(token), false);
 }
 
+{
+  const { device } = setup(() => null);
+  await device.saveDeviceState({ ...initial, recoverySetupRequired: true });
+  assert.equal((await device.loadDeviceState(accountA)).recoverySetupRequired, true, 'first-device recovery setup survives lock and reload');
+  await assert.rejects(device.saveDeviceState({ ...initial, recoverySetupRequired: 'yes' }), /local state/i);
+}
+
 for (const [label, reply] of [
   ['wrong device', { device_id: accountB, generation, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z' }],
   ['wrong generation', { device_id: deviceId, generation: accountB, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z' }],
