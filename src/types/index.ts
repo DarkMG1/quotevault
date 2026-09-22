@@ -46,6 +46,7 @@ export interface DeviceLease { version: 1; claims: DeviceLeaseClaims; signature:
 export interface DeviceLocalState {
     accountId: string;
     deviceId: string;
+    publicKeyFingerprint: string;
     protectionMode: 'passkey-prf' | 'remembered';
     protection: Record<string, unknown>;
     encryptedPrivateBundle: EnvelopeCiphertext;

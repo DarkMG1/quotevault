@@ -36,7 +36,7 @@ function setup(reply) {
 }
 
 const rememberedKey = await webcrypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-const initial = { accountId: accountA, deviceId, protectionMode: 'remembered', protection: { version: 1, mode: 'remembered' }, encryptedPrivateBundle: bundle, wrapper: { generation, wrappedKey: wrapper } };
+const initial = { accountId: accountA, deviceId, publicKeyFingerprint: digest, protectionMode: 'remembered', protection: { version: 1, mode: 'remembered' }, encryptedPrivateBundle: bundle, wrapper: { generation, wrappedKey: wrapper } };
 
 {
   const { device } = setup(() => null);
@@ -47,17 +47,38 @@ const initial = { accountId: accountA, deviceId, protectionMode: 'remembered', p
 
 {
   const { device } = setup(() => null);
-  const first = await device.enrollmentFingerprint({ accountId: accountA, publicKeyFingerprint: digest, tokenDigest: token, protectionMode: 'remembered', protection: { nested: { z: 1, a: true }, mode: 'remembered' } });
-  const second = await device.enrollmentFingerprint({ accountId: accountA, publicKeyFingerprint: digest, tokenDigest: token, protectionMode: 'remembered', protection: { mode: 'remembered', nested: { a: true, z: 1 } } });
-  const withRuntimeExtra = await device.enrollmentFingerprint({ accountId: accountA, publicKeyFingerprint: digest, tokenDigest: token, protectionMode: 'remembered', protection: { mode: 'remembered', nested: { z: 1, a: true } }, encryptedPrivateBundle: { ignored: true } });
-  const withoutRuntimeExtra = await device.enrollmentFingerprint({ accountId: accountA, publicKeyFingerprint: digest, tokenDigest: token, protectionMode: 'remembered', protection: { mode: 'remembered', nested: { z: 1, a: true } } });
+  const exactRemembered = { version: 1, mode: 'remembered' };
+  await device.saveDeviceState({ ...initial, protection: exactRemembered, rememberedKey });
+  for (const protection of [
+    { version: 1, mode: 'remembered', extra: true },
+    { version: 1 },
+    { version: 2, mode: 'remembered' },
+    { version: 1, mode: 'passkey-prf' },
+  ]) await assert.rejects(device.saveDeviceState({ ...initial, protection, rememberedKey }), /protection/i);
+  const passkey = { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: token, prfSalt: digest };
+  await device.saveDeviceState({ ...initial, protectionMode: 'passkey-prf', protection: passkey });
+  for (const protection of [
+    { ...passkey, extra: true },
+    { ...passkey, rpId: 'evil.example' },
+    { ...passkey, credentialId: 'AA==' },
+    { ...passkey, prfSalt: digest.slice(1) },
+  ]) await assert.rejects(device.saveDeviceState({ ...initial, protectionMode: 'passkey-prf', protection }), /protection/i);
+}
+
+{
+  const { device } = setup(() => null);
+  const protection = { version: 1, mode: 'remembered' };
+  const first = await device.enrollmentFingerprint({ accountId: accountA, publicKeyFingerprint: digest, tokenDigest: token, protectionMode: 'remembered', protection });
+  const second = await device.enrollmentFingerprint({ accountId: accountA, publicKeyFingerprint: digest, tokenDigest: token, protectionMode: 'remembered', protection: { mode: 'remembered', version: 1 } });
+  const withRuntimeExtra = await device.enrollmentFingerprint({ accountId: accountA, publicKeyFingerprint: digest, tokenDigest: token, protectionMode: 'remembered', protection, encryptedPrivateBundle: { ignored: true } });
+  const withoutRuntimeExtra = await device.enrollmentFingerprint({ accountId: accountA, publicKeyFingerprint: digest, tokenDigest: token, protectionMode: 'remembered', protection });
   assert.equal(first, second);
   assert.equal(withRuntimeExtra, withoutRuntimeExtra, 'runtime bundle properties do not affect enrollment fingerprint');
 }
 
 {
   const publicJwk = { kty: 'RSA', n: 'n', e: 'AQAB' };
-  const input = { deviceId, ownerId: accountA, label: 'Browser', publicJwk, publicKeyFingerprint: digest, tokenDigest: token, protectionMode: 'remembered', protection: { mode: 'remembered' }, encryptedPrivateBundle: bundle, requestKind: 'first' };
+  const input = { deviceId, ownerId: accountA, label: 'Browser', publicJwk, publicKeyFingerprint: digest, tokenDigest: token, protectionMode: 'remembered', protection: { version: 1, mode: 'remembered' }, encryptedPrivateBundle: bundle, requestKind: 'first' };
   let response;
   const { device, calls } = setup((name, args) => {
     if (name !== 'request_device') return null;
@@ -72,19 +93,19 @@ const initial = { accountId: accountA, deviceId, protectionMode: 'remembered', p
 }
 
 {
-  const protection = { nested: { a: true, z: 1 }, mode: 'remembered' };
+  const protection = { version: 1, mode: 'remembered' };
   const enrollment = await setup(() => null).device.enrollmentFingerprint({ accountId: accountA, publicKeyFingerprint: digest, tokenDigest: token, protectionMode: 'remembered', protection });
   const reply = { request_id: deviceId, owner_id: accountA, request_kind: 'first', label: 'Browser', public_jwk: { kty: 'RSA', n: 'n', e: 'AQAB' }, public_key_fingerprint: digest, authorization_token_digest: token, enrollment_fingerprint: enrollment, protection_mode: 'remembered', protection, expires_at: '2030-01-01T00:00:00.000Z' };
   const { device } = setup(() => reply);
   const result = await device.getDeviceRequest(deviceId);
   assert.equal(result.enrollmentFingerprint, enrollment);
-  const altered = { ...reply, protection: { mode: 'passkey-prf' } };
-  await assert.rejects(setup(() => altered).device.getDeviceRequest(deviceId), /request response/i);
+  const altered = { ...reply, protection: { version: 1, mode: 'remembered', extra: true } };
+  await assert.rejects(setup(() => altered).device.getDeviceRequest(deviceId), /protection/i);
   await assert.rejects(setup(() => ({ ...reply, encrypted_private_bundle: bundle })).device.getDeviceRequest(deviceId), /request response/i);
 }
 
 {
-  const passkeyState = { ...initial, protectionMode: 'passkey-prf' };
+  const passkeyState = { ...initial, protectionMode: 'passkey-prf', protection: { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: token, prfSalt: digest } };
   const { device, deviceState, calls } = setup(() => ({ device_id: deviceId, generation, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z' }));
   await device.saveDeviceState(passkeyState);
   const result = await device.completeDevice(accountA, deviceId, token);
@@ -130,6 +151,15 @@ for (const [label, reply] of [
   assert.equal(await device.loadDeviceState(accountB), null);
   assert.equal(JSON.stringify(calls[0]), JSON.stringify({ name: 'complete_device', args: { p_device_id: deviceId, p_token: token, p_generation: generation } }));
   assert.equal(deviceState.rows.size, 1);
+}
+
+{
+  const lease = { version: 1, claims: [1, deviceId, accountA, generation, 1, 2, digest], signature: 'AA==' };
+  const { device, deviceState } = setup(() => ({ device_id: deviceId, generation, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z' }));
+  await device.saveDeviceState({ ...initial, lease, rememberedKey });
+  const complete = await device.completeDevice(accountA, deviceId, token, rememberedKey);
+  assert.equal(JSON.stringify(complete.lease), JSON.stringify(lease), 'completion keeps the signed lease verified before wrapper retrieval');
+  assert.equal(JSON.stringify(deviceState.rows.get(accountA).lease), JSON.stringify(lease));
 }
 
 {
