@@ -20,11 +20,15 @@ declare
   token_digest text := rtrim(replace(replace(replace(encode(sha256(decode(token || '=', 'base64')), 'base64'), E'\n', ''), '+', '-'), '/', '_'), '=');
   public_jwk jsonb := jsonb_build_object('kty', 'RSA', 'n', rtrim(replace(replace(replace(encode(decode('80' || repeat('00', 383), 'hex'), 'base64'), E'\n', ''), '+', '-'), '/', '_'), '='), 'e', 'AQAB');
   protection jsonb := '{"version":1,"mode":"remembered"}'::jsonb;
-  fingerprint text := repeat('B', 43);
+  fingerprint text := token_digest;
   public_fingerprint text := public.qv_public_key_fingerprint(public_jwk);
   bundle jsonb := jsonb_build_object('version', 2, 'iv', 'AAAAAAAAAAAAAAAA', 'data', 'AAAAAAAAAAAAAAAAAAAAAA==');
+  wrapped_key text := repeat('A', 512);
   response jsonb;
 begin
+  if public_fingerprint <> 'iPVduNKCGT34kk9i521zc92kE2KKTTD30csvve5Hrkc' then
+    raise exception 'public-key fingerprint fixed vector changed: %', public_fingerprint;
+  end if;
   select vs.generation into generation from public.vault_state vs where singleton;
   insert into public.allowlist(id, email, created_at)
   values (member_id, 'member@example.invalid', now()), (admin_id, 'darkmgdevelopment@gmail.com', now()), (other_id, 'other@example.invalid', now())
@@ -60,7 +64,7 @@ begin
 
   perform set_config('request.jwt.claim.sub', admin_id::text, true);
   begin
-    perform public.approve_device(request_id, member_id, public_fingerprint, repeat('D', 43), 'wrapped', generation, null, null);
+    perform public.approve_device(request_id, member_id, public_fingerprint, repeat('D', 43), wrapped_key, generation, null, null);
     raise exception 'changed enrollment fingerprint approved';
   exception when sqlstate '40001' then null;
   end;
@@ -68,13 +72,22 @@ begin
      or exists (select 1 from public.vault_device_wrappers w where w.device_id = request_id) then
     raise exception 'failed approval changed request state';
   end if;
-  response := public.approve_device(request_id, member_id, public_fingerprint, fingerprint, 'wrapped', generation, null, null);
+  begin
+    perform public.approve_device(request_id, member_id, public_fingerprint, fingerprint, 'malformed-wrapper', generation, null, null);
+    raise exception 'malformed wrapper approved';
+  exception when sqlstate '40001' then null;
+  end;
+  if not exists (select 1 from public.vault_devices where id = request_id and status = 'pending')
+     or exists (select 1 from public.vault_device_wrappers w where w.device_id = request_id) then
+    raise exception 'failed malformed wrapper changed request state';
+  end if;
+  response := public.approve_device(request_id, member_id, public_fingerprint, fingerprint, wrapped_key, generation, null, null);
   if response->>'status' <> 'approved' then raise exception 'approval did not succeed'; end if;
   if (select count(*) from public.vault_device_wrappers w where w.device_id = (response->>'device_id')::uuid) <> 1 then
     raise exception 'approval did not store exactly one wrapper';
   end if;
   begin
-    perform public.approve_device(request_id, member_id, public_fingerprint, fingerprint, 'wrapped-again', generation, null, null);
+    perform public.approve_device(request_id, member_id, public_fingerprint, fingerprint, wrapped_key, generation, null, null);
     raise exception 'approval replay succeeded';
   exception when sqlstate '40001' then null;
   end;
@@ -99,7 +112,7 @@ begin
   response := public.request_device(prepared_device_id, member_id, 'prepared-device', public_jwk, fingerprint, public_fingerprint, token_digest, 'remembered', protection, bundle, 'additional');
   prepared_request_id := (response->>'request_id')::uuid;
   perform set_config('request.jwt.claim.sub', admin_id::text, true);
-  response := public.approve_device(prepared_request_id, member_id, public_fingerprint, fingerprint, 'prepared-wrapped', prepared_gen, null, null);
+  response := public.approve_device(prepared_request_id, member_id, public_fingerprint, fingerprint, wrapped_key, prepared_gen, null, null);
   perform set_config('request.jwt.claim.sub', member_id::text, true);
   if public.complete_device(prepared_device_id, token, prepared_gen) is null then raise exception 'prepared completion failed'; end if;
   if public.qv_authorize_device(prepared_device_id, token, prepared_gen, 'sync') is not null then raise exception 'prepared generation authorized data'; end if;
@@ -132,7 +145,7 @@ begin
   update public.vault_devices set expires_at = now() - interval '1 second' where id = expired_request_id;
   perform set_config('request.jwt.claim.sub', admin_id::text, true);
   begin
-    perform public.approve_device(expired_request_id, member_id, public_fingerprint, fingerprint, 'wrapped', generation, null, null);
+    perform public.approve_device(expired_request_id, member_id, public_fingerprint, fingerprint, wrapped_key, generation, null, null);
     raise exception 'expired request approved';
   exception when sqlstate '40001' then null;
   end;
@@ -141,7 +154,7 @@ begin
   update public.vault_state set envelope_status = 'active' where singleton;
   response := public.request_device('22222222-2222-4222-8222-222222222222', member_id, 'active-null-approver', public_jwk, fingerprint, public_fingerprint, token_digest, 'remembered', protection, bundle, 'additional');
   begin
-    perform public.approve_device((response->>'request_id')::uuid, member_id, public_fingerprint, fingerprint, 'wrapped', generation, null, null);
+    perform public.approve_device((response->>'request_id')::uuid, member_id, public_fingerprint, fingerprint, wrapped_key, generation, null, null);
     raise exception 'active admin null approver approved';
   exception when sqlstate '42501' then null;
   end;
@@ -184,26 +197,28 @@ do $$
 declare
   migration_id uuid := gen_random_uuid();
   target_generation uuid := gen_random_uuid();
-  copy_row jsonb := jsonb_build_object(
-    'id', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
-    'text', 'encrypted', 'author', 'ENCRYPTED', 'context', 'ENCRYPTED',
-    'quote_date', '2026-09-22', 'created_at', '2026-09-22T00:00:00.000Z',
-    'user_id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-    'vault_generation', (public.get_vault_state()->>'generation'));
+  copy_row jsonb;
 begin
+  select jsonb_build_object('id', q.id, 'text', q.text, 'author', q.author, 'context', q.context,
+                            'quote_date', q.quote_date, 'created_at', q.created_at,
+                            'user_id', q.user_id, 'vault_generation', q.vault_generation)
+    into copy_row
+    from public.quotes q where q.id = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  copy_row := jsonb_set(copy_row, '{created_at}', to_jsonb('2026-09-22T00:00:00.000Z'::text));
   insert into public.vault_migrations(id, source_generation, target_generation, target_verifier, source_revision, expected_quote_count, status, initiating_device_id)
-  values (migration_id, (public.get_vault_state()->>'generation')::uuid, target_generation, '{"version":1}'::jsonb, 0, 1, 'prepared', '11111111-1111-4111-8111-111111111111');
+  values (migration_id, (public.get_vault_state()->>'generation')::uuid, target_generation, public.qv_legacy_verifier(), 0, 1, 'prepared', '11111111-1111-4111-8111-111111111111');
+  insert into public.vault_migration_quote_copies(migration_id, copy_kind, quote_id, encrypted_row, vault_generation)
+  values (migration_id, 'staged', (copy_row->>'id')::uuid, copy_row, (copy_row->>'vault_generation')::uuid);
   begin
     insert into public.vault_migration_quote_copies(migration_id, copy_kind, quote_id, encrypted_row, vault_generation)
-    values (migration_id, 'staged', gen_random_uuid(), copy_row, (public.get_vault_state()->>'generation')::uuid);
+    values (migration_id, 'rollback', gen_random_uuid(), copy_row, (copy_row->>'vault_generation')::uuid);
     raise exception 'migration copy accepted mismatched quote id';
   exception when check_violation then null;
   end;
-  copy_row := jsonb_set(copy_row, '{id}', to_jsonb('dddddddd-dddd-4ddd-8ddd-dddddddddddd'::text));
   copy_row := jsonb_set(copy_row, '{vault_generation}', to_jsonb(target_generation));
   begin
     insert into public.vault_migration_quote_copies(migration_id, copy_kind, quote_id, encrypted_row, vault_generation)
-    values (migration_id, 'rollback', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', copy_row, (public.get_vault_state()->>'generation')::uuid);
+    values (migration_id, 'rollback', (copy_row->>'id')::uuid, copy_row, (public.get_vault_state()->>'generation')::uuid);
     raise exception 'migration copy accepted mismatched generation';
   exception when check_violation then null;
   end;

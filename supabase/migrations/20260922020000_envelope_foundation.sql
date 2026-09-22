@@ -57,7 +57,7 @@ declare
   payload bytea;
 begin
   if public.qv_valid_public_jwk(p_jwk) is not true then return null; end if;
-  payload := convert_to(jsonb_build_array(1, 'RSA-OAEP', 'SHA-256', p_jwk->>'n', p_jwk->>'e')::text, 'UTF8');
+  payload := convert_to('[1,"RSA-OAEP","' || 'SHA-256' || '","' || (p_jwk->>'n') || '","' || (p_jwk->>'e') || '"]', 'UTF8');
   return rtrim(replace(replace(replace(encode(sha256(payload), 'base64'), E'\n', ''), '+', '-'), '/', '_'), '=');
 exception when others then
   return null;
@@ -115,10 +115,10 @@ create table if not exists public.vault_devices (
   status text not null check (status in ('pending', 'active', 'revoked', 'expired')),
   request_kind text not null check (request_kind in ('first', 'additional', 'recovery')),
   expires_at timestamptz,
-  enrollment_fingerprint text not null check (enrollment_fingerprint ~ '^[A-Za-z0-9_-]{43}$'),
+  enrollment_fingerprint text not null check (public.qv_base64url_bytes(enrollment_fingerprint, 32) is not null),
   public_jwk jsonb not null check (public.qv_valid_public_jwk(public_jwk) and octet_length(public_jwk::text) <= 32768),
-  public_key_fingerprint text not null check (public_key_fingerprint ~ '^[A-Za-z0-9_-]{43}$'),
-  authorization_token_digest text not null check (authorization_token_digest ~ '^[A-Za-z0-9_-]{43}$'),
+  public_key_fingerprint text not null check (public.qv_base64url_bytes(public_key_fingerprint, 32) is not null and public.qv_public_key_fingerprint(public_jwk) = public_key_fingerprint),
+  authorization_token_digest text not null check (public.qv_base64url_bytes(authorization_token_digest, 32) is not null),
   label text not null check (length(label) between 1 and 100),
   protection_mode text not null check (protection_mode in ('passkey-prf', 'remembered')),
   protection jsonb not null check (jsonb_typeof(protection) = 'object' and octet_length(protection::text) <= 32768),
@@ -136,7 +136,7 @@ create table if not exists public.vault_device_wrappers (
   device_id uuid not null references public.vault_devices(id) on delete cascade,
   generation uuid not null,
   purpose text not null check (purpose in ('active', 'conversion_only')),
-  wrapped_key text not null check (length(wrapped_key) between 1 and 32768),
+  wrapped_key text not null check (public.qv_base64url_bytes(wrapped_key, 384) is not null),
   created_by_device_id uuid references public.vault_devices(id) on delete set null,
   created_at timestamptz not null default now(),
   primary key (device_id, generation, purpose)
@@ -147,7 +147,7 @@ create table if not exists public.vault_recovery_keys (
   owner_id uuid not null references auth.users(id) on delete cascade,
   status text not null check (status in ('pending', 'active', 'revoked')),
   public_jwk jsonb not null check (public.qv_valid_public_jwk(public_jwk) and octet_length(public_jwk::text) <= 32768),
-  public_key_fingerprint text not null check (public_key_fingerprint ~ '^[A-Za-z0-9_-]{43}$'),
+  public_key_fingerprint text not null check (public.qv_base64url_bytes(public_key_fingerprint, 32) is not null and public.qv_public_key_fingerprint(public_jwk) = public_key_fingerprint),
   encrypted_private_key jsonb not null check (public.qv_valid_encrypted_bundle(encrypted_private_key)),
   kdf jsonb not null check (jsonb_typeof(kdf) = 'object' and octet_length(kdf::text) <= 32768),
   created_at timestamptz not null default now(),
@@ -160,7 +160,7 @@ create table if not exists public.vault_recovery_keys (
 create table if not exists public.vault_recovery_wrappers (
   recovery_key_id uuid not null references public.vault_recovery_keys(id) on delete cascade,
   generation uuid not null,
-  wrapped_key text not null check (length(wrapped_key) between 1 and 32768),
+  wrapped_key text not null check (public.qv_base64url_bytes(wrapped_key, 384) is not null),
   created_by_device_id uuid references public.vault_devices(id) on delete set null,
   created_at timestamptz not null default now(),
   primary key (recovery_key_id, generation)
@@ -169,7 +169,7 @@ create table if not exists public.vault_recovery_wrappers (
 create table if not exists public.vault_recovery_challenges (
   id uuid primary key default gen_random_uuid(),
   recovery_key_id uuid not null references public.vault_recovery_keys(id) on delete cascade,
-  expected_digest text not null check (expected_digest ~ '^[A-Za-z0-9_-]{43}$'),
+  expected_digest text not null check (public.qv_base64url_bytes(expected_digest, 32) is not null),
   expires_at timestamptz not null,
   used_at timestamptz,
   created_at timestamptz not null default now()
@@ -179,7 +179,7 @@ create table if not exists public.vault_migrations (
   id uuid primary key default gen_random_uuid(),
   source_generation uuid not null,
   target_generation uuid not null unique,
-  target_verifier jsonb not null check (jsonb_typeof(target_verifier) = 'object' and octet_length(target_verifier::text) <= 32768),
+  target_verifier jsonb not null check (public.qv_valid_verifier(target_verifier) and octet_length(target_verifier::text) <= 32768),
   source_revision bigint not null check (source_revision >= 0),
   expected_quote_count integer not null check (expected_quote_count >= 0),
   status text not null check (status in ('prepared', 'staging', 'verified', 'activated', 'rolled_back', 'abandoned')),
@@ -197,6 +197,15 @@ create table if not exists public.vault_migration_quote_copies (
   vault_generation uuid not null,
   primary key (migration_id, copy_kind, quote_id)
 );
+
+do $fk$
+begin
+  if not exists (select 1 from pg_constraint where conrelid = 'public.vault_state'::regclass and conname = 'vault_state_active_migration_id_fkey') then
+    alter table public.vault_state add constraint vault_state_active_migration_id_fkey
+      foreign key (active_migration_id) references public.vault_migrations(id) on delete set null;
+  end if;
+end;
+$fk$;
 
 create table if not exists public.vault_security_events (
   id bigint generated always as identity primary key,
@@ -270,10 +279,10 @@ begin
   if public.qv_is_active_profile(p_owner_id) is not true then raise exception 'QuoteVault membership is required' using errcode = '42501'; end if;
   if p_public_jwk is null or octet_length(p_public_jwk::text) > 32768 or public.qv_valid_public_jwk(p_public_jwk) is not true
      or p_device_id is null
-     or p_public_key_fingerprint !~ '^[A-Za-z0-9_-]{43}$'
+     or public.qv_base64url_bytes(p_public_key_fingerprint, 32) is null
      or public.qv_public_key_fingerprint(p_public_jwk) is distinct from p_public_key_fingerprint
-     or p_enrollment_fingerprint !~ '^[A-Za-z0-9_-]{43}$'
-     or p_token_digest !~ '^[A-Za-z0-9_-]{43}$'
+     or public.qv_base64url_bytes(p_enrollment_fingerprint, 32) is null
+     or public.qv_base64url_bytes(p_token_digest, 32) is null
      or p_protection_mode not in ('passkey-prf', 'remembered')
      or p_request_kind not in ('first', 'additional', 'recovery')
      or public.qv_valid_encrypted_bundle(p_encrypted_private_bundle) is not true then
@@ -334,7 +343,7 @@ begin
      or pending.status <> 'pending' or pending.expires_at <= now()
      or pending.public_key_fingerprint is distinct from p_public_key_fingerprint
      or pending.enrollment_fingerprint is distinct from p_enrollment_fingerprint
-     or p_wrapped_key is null or length(p_wrapped_key) > 32768 then
+     or public.qv_base64url_bytes(p_wrapped_key, 384) is null then
     raise exception 'Device approval request is invalid or expired' using errcode = '40001';
   end if;
   if caller is distinct from pending.owner_id and public.qv_is_admin() is not true then raise exception 'Device approval is not authorized' using errcode = '42501'; end if;
