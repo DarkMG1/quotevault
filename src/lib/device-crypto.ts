@@ -2,6 +2,7 @@ import { arrayBufferToBase64, base64ToArrayBuffer } from './crypto';
 import type {
     BundleBinding,
     EnvelopeCiphertext,
+    PasskeyPrfProtection,
     PrivateDeviceBundle,
     RecoveryKdf,
     VaultKeyWrapperBinding,
@@ -13,6 +14,7 @@ export type {
     DeviceLease,
     DeviceLeaseClaims,
     EnvelopeCiphertext,
+    PasskeyPrfProtection,
     PrivateDeviceBundle,
     RecoveryKdf,
     VaultKeyWrapperBinding,
@@ -50,14 +52,17 @@ const exactMasterKey = (value: unknown): Uint8Array => {
     if (!(value instanceof Uint8Array) || value.byteLength !== 32) fail();
     return value as Uint8Array;
 };
-const validRecoveryKdf = (value: unknown): RecoveryKdf => {
+const exactObject = (value: unknown, expected: readonly string[]): object => {
     if (!value || typeof value !== 'object') fail();
     const object = value as object;
     if (Object.getPrototypeOf(object) !== Object.prototype) fail();
     const fields = Reflect.ownKeys(object);
-    if (fields.length !== 3 || !fields.every((field) => typeof field === 'string' &&
-        ['version', 'salt', 'iterations'].includes(field) && Object.prototype.propertyIsEnumerable.call(object, field) &&
-        'value' in (Object.getOwnPropertyDescriptor(object, field) ?? {}))) fail();
+    if (fields.length !== expected.length || !fields.every((field) => typeof field === 'string' && expected.includes(field) &&
+        Object.prototype.propertyIsEnumerable.call(object, field) && 'value' in (Object.getOwnPropertyDescriptor(object, field) ?? {}))) fail();
+    return object;
+};
+const validRecoveryKdf = (value: unknown): RecoveryKdf => {
+    const object = exactObject(value, ['version', 'salt', 'iterations']);
     const kdf = object as Partial<RecoveryKdf>;
     if (kdf.version !== 1 || kdf.iterations !== RECOVERY_ITERATIONS) fail();
     const salt = base64ToBytes(kdf.salt);
@@ -68,17 +73,43 @@ const validRecoveryKdf = (value: unknown): RecoveryKdf => {
     }
     return object as RecoveryKdf;
 };
-const validBinding = (binding: BundleBinding): RecoveryKdf | undefined => {
+const validPasskeyProtection = (value: unknown): PasskeyPrfProtection => {
+    const object = exactObject(value, ['version', 'rpId', 'credentialId', 'prfSalt', 'kdf']);
+    const protection = object as Partial<PasskeyPrfProtection>;
+    if (protection.version !== 1 || protection.rpId !== 'quotes.darkmg1.dev' || protection.kdf !== 'HKDF-SHA-256') fail();
+    const credentialId = base64urlToBytes(protection.credentialId);
+    const prfSalt = base64urlToBytes(protection.prfSalt);
+    try {
+        if (credentialId.byteLength < 1 || credentialId.byteLength > 1023 || prfSalt.byteLength !== 32) fail();
+    } finally {
+        credentialId.fill(0);
+        prfSalt.fill(0);
+    }
+    return object as PasskeyPrfProtection;
+};
+const validBinding = (binding: BundleBinding): { recoveryKdf?: RecoveryKdf; protection?: PasskeyPrfProtection } => {
     if (!text(binding.accountId) || !text(binding.recordId) || !text(binding.publicKeyFingerprint) || binding.version !== 1 ||
         !['passkey-prf', 'remembered', 'recovery'].includes(binding.protectionMode)) fail();
-    if (binding.protectionMode === 'recovery') return validRecoveryKdf(binding.recoveryKdf);
-    if (binding.recoveryKdf !== undefined) fail();
+    if (binding.protectionMode === 'recovery') {
+        if (binding.protection !== undefined) fail();
+        return { recoveryKdf: validRecoveryKdf(binding.recoveryKdf) };
+    }
+    if (binding.protectionMode === 'passkey-prf') {
+        if (binding.recoveryKdf !== undefined) fail();
+        return { protection: validPasskeyProtection(binding.protection) };
+    }
+    if (binding.recoveryKdf !== undefined || binding.protection !== undefined) fail();
+    return {};
 };
 const bundleAad = (binding: BundleBinding): string => {
-    const recoveryKdf = validBinding(binding);
+    const { recoveryKdf, protection } = validBinding(binding);
     if (recoveryKdf) {
         return JSON.stringify([1, binding.accountId, binding.recordId, binding.publicKeyFingerprint, binding.protectionMode, binding.version,
             [recoveryKdf.version, recoveryKdf.salt, recoveryKdf.iterations]]);
+    }
+    if (protection) {
+        return JSON.stringify([1, binding.accountId, binding.recordId, binding.publicKeyFingerprint, binding.protectionMode, binding.version,
+            [protection.version, protection.rpId, protection.credentialId, protection.prfSalt, protection.kdf]]);
     }
     return JSON.stringify([1, binding.accountId, binding.recordId, binding.publicKeyFingerprint, binding.protectionMode, binding.version]);
 };

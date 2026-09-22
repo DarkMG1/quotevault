@@ -135,6 +135,11 @@ test('recovery bundle AAD requires canonical KDF metadata', async () => {
   const hiddenKdf = { ...recoveryKdf };
   Object.defineProperty(hiddenKdf, 'algorithm', { value: 'PBKDF2' });
   await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, recoveryKdf: hiddenKdf }));
+  const passkeyProtection = { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: 'AQIDBA', prfSalt: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', kdf: 'HKDF-SHA-256' };
+  const recoveryAad = JSON.stringify([1, binding.accountId, binding.recordId, binding.publicKeyFingerprint, binding.protectionMode, binding.version, [recoveryKdf.version, recoveryKdf.salt, recoveryKdf.iterations]]);
+  const recoveryEncrypted = await cryptoApi.encryptEnvelope(JSON.stringify(bundle), key, recoveryAad);
+  assert.equal(JSON.stringify(await cryptoApi.decryptPrivateBundle(recoveryEncrypted, key, binding)), JSON.stringify(bundle));
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, protection: passkeyProtection }));
 
   const rememberedBinding = { ...binding, protectionMode: 'remembered', recoveryKdf: undefined };
   const rememberedKey = await webcrypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
@@ -143,9 +148,28 @@ test('recovery bundle AAD requires canonical KDF metadata', async () => {
   assert.equal(JSON.stringify(await cryptoApi.decryptPrivateBundle(legacyEncrypted, rememberedKey, rememberedBinding)), JSON.stringify(bundle));
   await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, rememberedKey, { ...rememberedBinding, recoveryKdf }));
   await assert.rejects(cryptoApi.decryptPrivateBundle(legacyEncrypted, rememberedKey, { ...rememberedBinding, recoveryKdf }));
-  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, rememberedKey, { ...rememberedBinding, protectionMode: 'passkey-prf', recoveryKdf }));
-  const passkeyBinding = { ...rememberedBinding, protectionMode: 'passkey-prf' };
-  const passkeyAad = JSON.stringify([1, passkeyBinding.accountId, passkeyBinding.recordId, passkeyBinding.publicKeyFingerprint, passkeyBinding.protectionMode, passkeyBinding.version]);
-  const passkeyEncrypted = await cryptoApi.encryptEnvelope(JSON.stringify(bundle), rememberedKey, passkeyAad);
-  assert.equal(JSON.stringify(await cryptoApi.decryptPrivateBundle(passkeyEncrypted, rememberedKey, passkeyBinding)), JSON.stringify(bundle));
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, rememberedKey, { ...rememberedBinding, protection: passkeyProtection }));
+});
+
+test('passkey bundle AAD requires exact PRF protection metadata', async () => {
+  const pair = await cryptoApi.generateWrappingKeyPair();
+  const fingerprint = await cryptoApi.fingerprintPublicJwk(await webcrypto.subtle.exportKey('jwk', pair.publicKey));
+  const key = await webcrypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  const protection = { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: 'AQIDBA', prfSalt: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', kdf: 'HKDF-SHA-256' };
+  const binding = { accountId: 'account-a', recordId: 'device-a', publicKeyFingerprint: fingerprint, protectionMode: 'passkey-prf', version: 1, protection };
+  const bundle = { version: 1, privateJwk: await webcrypto.subtle.exportKey('jwk', pair.privateKey), authorizationToken: cryptoApi.generateAuthorizationToken() };
+  const encrypted = await cryptoApi.encryptPrivateBundle(bundle, key, binding);
+  assert.equal(JSON.stringify(await cryptoApi.decryptPrivateBundle(encrypted, key, binding)), JSON.stringify(bundle));
+
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, protection: undefined }));
+  await assert.rejects(cryptoApi.decryptPrivateBundle(encrypted, key, { ...binding, protection: { ...protection, version: 2 } }));
+  await assert.rejects(cryptoApi.decryptPrivateBundle(encrypted, key, { ...binding, protection: { ...protection, rpId: 'example.com' } }));
+  await assert.rejects(cryptoApi.decryptPrivateBundle(encrypted, key, { ...binding, protection: { ...protection, credentialId: 'BQYHCA' } }));
+  await assert.rejects(cryptoApi.decryptPrivateBundle(encrypted, key, { ...binding, protection: { ...protection, prfSalt: 'BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' } }));
+  await assert.rejects(cryptoApi.decryptPrivateBundle(encrypted, key, { ...binding, protection: { ...protection, kdf: 'PBKDF2' } }));
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, protection: { ...protection, algorithm: 'PRF' } }));
+  const { credentialId, ...missingCredential } = protection;
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, protection: missingCredential }));
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, protection: { ...protection, credentialId: 'AQ==' } }));
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, protection: { ...protection, prfSalt: `${protection.prfSalt}=` } }));
 });

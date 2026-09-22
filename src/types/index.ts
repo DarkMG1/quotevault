@@ -31,10 +31,12 @@ export interface SyncMetadata {
 
 export interface EnvelopeCiphertext { version: 2; iv: string; data: string }
 export interface RecoveryKdf { version: 1; salt: string; iterations: 600000 }
+export interface PasskeyPrfProtection { version: 1; rpId: 'quotes.darkmg1.dev'; credentialId: string; prfSalt: string; kdf: 'HKDF-SHA-256' }
 export interface BundleBinding {
     accountId: string; recordId: string; publicKeyFingerprint: string;
     protectionMode: 'passkey-prf' | 'remembered' | 'recovery'; version: 1;
     recoveryKdf?: RecoveryKdf;
+    protection?: PasskeyPrfProtection;
 }
 export interface PrivateDeviceBundle { version: 1; privateJwk: JsonWebKey; authorizationToken: string }
 export interface VaultKeyWrapperBinding { vaultId: 'quotevault'; generation: string; targetFingerprint: string }
