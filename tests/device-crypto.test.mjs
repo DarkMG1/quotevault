@@ -1,0 +1,96 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
+import { loadModule } from './load-module.mjs';
+
+const cryptoModule = loadModule('src/lib/crypto.ts', {}, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob });
+const cryptoApi = loadModule('src/lib/device-crypto.ts', { './crypto': cryptoModule }, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob });
+
+const GENERATION_A = 'd4c3b2a1-0000-4000-8000-000000000001';
+const GENERATION_B = 'd4c3b2a1-0000-4000-8000-000000000002';
+
+test('quote keys and ciphertext are bound to their generation and record', async () => {
+  const master = cryptoApi.generateVaultMasterKey();
+  const key = await cryptoApi.deriveQuoteKey(master, GENERATION_A);
+  const encrypted = await cryptoApi.encryptEnvelope('private', key, `quote:q1:${GENERATION_A}`);
+  assert.equal(await cryptoApi.decryptEnvelope(encrypted, key, `quote:q1:${GENERATION_A}`), 'private');
+  await assert.rejects(cryptoApi.decryptEnvelope(encrypted, key, `quote:q2:${GENERATION_A}`));
+  await assert.rejects(cryptoApi.decryptEnvelope(encrypted, key, `quote:q1:${GENERATION_B}`));
+  await assert.rejects(cryptoApi.deriveQuoteKey(new Uint8Array(), GENERATION_A));
+  await assert.rejects(cryptoApi.deriveQuoteKey(new Uint8Array(31), GENERATION_A));
+});
+
+test('a wrapped vault key validates its target and generation', async () => {
+  const pair = await cryptoApi.generateWrappingKeyPair();
+  const publicJwk = await webcrypto.subtle.exportKey('jwk', pair.publicKey);
+  const fingerprint = await cryptoApi.fingerprintPublicJwk(publicJwk);
+  const masterKey = cryptoApi.generateVaultMasterKey();
+  const wrapped = await cryptoApi.wrapVaultKey({
+    version: 1, vaultId: 'quotevault', generation: GENERATION_A,
+    targetFingerprint: fingerprint, masterKey,
+  }, pair.publicKey);
+  assert.deepEqual(await cryptoApi.unwrapVaultKey(wrapped, pair.privateKey, {
+    vaultId: 'quotevault', generation: GENERATION_A, targetFingerprint: fingerprint,
+  }), masterKey);
+  await assert.rejects(cryptoApi.unwrapVaultKey(wrapped, pair.privateKey, {
+    vaultId: 'quotevault', generation: GENERATION_B, targetFingerprint: fingerprint,
+  }));
+  await assert.rejects(cryptoApi.wrapVaultKey({
+    version: 1, vaultId: 'quotevault', generation: GENERATION_A,
+    targetFingerprint: fingerprint, masterKey: new Uint8Array(33),
+  }, pair.publicKey));
+});
+
+test('wrapping keys use the required RSA-OAEP parameters', async () => {
+  const pair = await cryptoApi.generateWrappingKeyPair();
+  assert.equal(pair.publicKey.algorithm.name, 'RSA-OAEP');
+  assert.equal(pair.publicKey.algorithm.modulusLength, 3072);
+  assert.equal(pair.publicKey.algorithm.hash.name, 'SHA-256');
+  assert.deepEqual([...pair.publicKey.algorithm.publicExponent], [1, 0, 1]);
+});
+
+test('public JWK fingerprints are stable and reject malformed material', async () => {
+  const pair = await cryptoApi.generateWrappingKeyPair();
+  const jwk = await webcrypto.subtle.exportKey('jwk', pair.publicKey);
+  const fingerprint = await cryptoApi.fingerprintPublicJwk(jwk);
+  assert.equal(fingerprint, await cryptoApi.fingerprintPublicJwk({ use: 'enc', alg: 'RSA-OAEP-256', e: jwk.e, n: jwk.n, kty: 'RSA' }));
+  await assert.rejects(cryptoApi.fingerprintPublicJwk({ ...jwk, n: `${jwk.n}=` }));
+  await assert.rejects(cryptoApi.fingerprintPublicJwk({ ...jwk, n: jwk.n.slice(1) }));
+  await assert.rejects(cryptoApi.fingerprintPublicJwk({ ...jwk, e: 'Aw' }));
+  await assert.rejects(cryptoApi.fingerprintPublicJwk({ ...jwk, kty: 'EC' }));
+});
+
+test('authorization tokens have exact entropy, canonical encoding, and stable digests', async () => {
+  const token = cryptoApi.generateAuthorizationToken();
+  assert.match(token, /^[A-Za-z0-9_-]{43}$/);
+  const digest = await cryptoApi.digestAuthorizationToken(token);
+  assert.equal(digest, await cryptoApi.digestAuthorizationToken(token));
+  assert.notEqual(digest, token);
+  await assert.rejects(cryptoApi.digestAuthorizationToken(`${token}=`));
+  await assert.rejects(cryptoApi.digestAuthorizationToken('AA'));
+});
+
+test('recovery KDF enforces the fixed PBKDF2 policy', async () => {
+  const kdf = { version: 1, salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600000 };
+  const key = await cryptoApi.deriveRecoveryBundleKey('recovery phrase', kdf);
+  assert.equal(key.algorithm.name, 'AES-GCM');
+  assert.equal(key.extractable, false);
+  await assert.rejects(cryptoApi.deriveRecoveryBundleKey('recovery phrase', { ...kdf, iterations: 599999 }));
+  await assert.rejects(cryptoApi.deriveRecoveryBundleKey('recovery phrase', { ...kdf, iterations: 600001 }));
+  await assert.rejects(cryptoApi.deriveRecoveryBundleKey('recovery phrase', { ...kdf, salt: 'AA==' }));
+});
+
+test('private bundles authenticate their binding and reject malformed base64', async () => {
+  const pair = await cryptoApi.generateWrappingKeyPair();
+  const publicJwk = await webcrypto.subtle.exportKey('jwk', pair.publicKey);
+  const fingerprint = await cryptoApi.fingerprintPublicJwk(publicJwk);
+  const token = cryptoApi.generateAuthorizationToken();
+  const key = await cryptoApi.deriveRecoveryBundleKey('recovery phrase', { version: 1, salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600000 });
+  const binding = { accountId: 'account-a', recordId: 'device-a', publicKeyFingerprint: fingerprint, protectionMode: 'recovery', version: 1 };
+  const bundle = { version: 1, privateJwk: await webcrypto.subtle.exportKey('jwk', pair.privateKey), authorizationToken: token };
+  const encrypted = await cryptoApi.encryptPrivateBundle(bundle, key, binding);
+  assert.equal(JSON.stringify(await cryptoApi.decryptPrivateBundle(encrypted, key, binding)), JSON.stringify(bundle));
+  await assert.rejects(cryptoApi.decryptPrivateBundle(encrypted, key, { ...binding, accountId: 'account-b' }));
+  await assert.rejects(cryptoApi.decryptPrivateBundle({ ...encrypted, iv: '*' }, key, binding));
+  await assert.rejects(cryptoApi.decryptPrivateBundle({ ...encrypted, data: `${encrypted.data}*` }, key, binding));
+});
