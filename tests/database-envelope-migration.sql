@@ -69,6 +69,16 @@ begin
     raise exception 'wrong-token maintenance snapshot was accepted';
   exception when sqlstate '40001' then null;
   end;
+  perform set_config('request.jwt.claim.sub',member_id::text,true);
+  begin
+    perform public.get_envelope_migration_snapshot((migration->>'migration_id')::uuid,member_device,token);
+    raise exception 'non-admin maintenance snapshot was accepted';
+  exception when sqlstate '42501' then null;
+  end;
+  perform set_config('request.jwt.claim.sub',admin_id::text,true);
+  if public.edit_quote(target_generation,quote_id,cipher,cipher,current_date,admin_device,token) is not null
+     or public.checked_import(target_generation,0,'[]'::jsonb,admin_device,token) is not null
+     or public.renew_device_lease(admin_device,token) is not null then raise exception 'maintenance permitted active mutations'; end if;
   begin
     update public.quotes set text='$$E2E$${"version":2,"iv":"AAAAAAAAAAAAAAAA","data":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="}' where id=quote_id;
     perform public.finalize_envelope_migration((migration->>'migration_id')::uuid,admin_device,token);
