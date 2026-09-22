@@ -10,20 +10,20 @@ declare
   key_name text;
   credential bytea;
 begin
-  if jsonb_typeof(p_protection) <> 'object' then return false; end if;
+  if jsonb_typeof(p_protection) is distinct from 'object' then return false; end if;
   if p_mode = 'remembered' then
     return p_protection = '{"version":1,"mode":"remembered"}'::jsonb;
   end if;
-  if p_mode <> 'passkey-prf' then return false; end if;
+  if p_mode is distinct from 'passkey-prf' then return false; end if;
   for key_name in select jsonb_object_keys(p_protection) loop
     if key_name not in ('version', 'rpId', 'credentialId', 'prfSalt', 'kdf') then return false; end if;
   end loop;
-  if p_protection->'version' <> '1'::jsonb or jsonb_typeof(p_protection->'rpId') <> 'string'
-     or jsonb_typeof(p_protection->'credentialId') <> 'string' or jsonb_typeof(p_protection->'prfSalt') <> 'string'
+  if p_protection->'version' is distinct from '1'::jsonb or jsonb_typeof(p_protection->'rpId') is distinct from 'string'
+     or jsonb_typeof(p_protection->'credentialId') is distinct from 'string' or jsonb_typeof(p_protection->'prfSalt') is distinct from 'string'
      or p_protection->'kdf' is distinct from '"HKDF-SHA-256"'::jsonb
-     or p_protection->>'rpId' <> 'quotes.darkmg1.dev' then return false; end if;
+     or p_protection->>'rpId' is distinct from 'quotes.darkmg1.dev' then return false; end if;
   credential := public.qv_base64url_bytes(p_protection->>'credentialId');
-  return credential is not null and octet_length(credential) between 1 and 1024
+  return credential is not null and octet_length(credential) between 1 and 1023
      and public.qv_base64url_bytes(p_protection->>'prfSalt', 32) is not null;
 exception when others then
   return false;
