@@ -5,6 +5,8 @@ import { cancelSyncRequests, createSyncOperation, enqueueDeleteMutation, isTrans
 import { supabase } from '../lib/supabase';
 import { useAuth } from './useAuth';
 import { useCrypto } from './useCrypto';
+import { encryptQuoteRecord } from '../lib/quote-crypto';
+import { isCiphertextWithinLimit } from '../components/ui';
 import type { Quote, SyncQueueItem } from '../types';
 
 interface QuotesContextValue {
@@ -14,7 +16,7 @@ interface QuotesContextValue {
     pendingCount: number;
     lastSyncedAt: string | null;
     isSyncing: boolean;
-    addQuote: (text: string, author: string, context?: string, quoteDate?: string) => Promise<void>;
+    addQuote: (privateFields: { text: string; author: string; context?: string; source_sender?: string; import_source_id?: string }, quoteDate?: string) => Promise<void>;
     deleteQuote: (quote: Quote) => Promise<void>;
     refresh: () => Promise<void>;
     syncError: string;
@@ -27,7 +29,7 @@ const activeIdentityKey = 'sync-active-identity';
 
 export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
     const { user, canSync, retry: retrySession } = useAuth();
-    const { vaultGeneration, legacyVaultGeneration, lockVault } = useCrypto();
+    const { encryptionKey, vaultGeneration, legacyVaultGeneration, lockVault } = useCrypto();
     const [initializedIdentity, setInitializedIdentity] = useState<string | null>(null);
     const [lastSync, setLastSync] = useState<{ identity: string; at: string } | null>(null);
     const [syncError, setSyncError] = useState('');
@@ -196,20 +198,23 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
         };
     }, [canSync, context, ready, refresh]);
 
-    const addQuote = useCallback(async (text: string, author: string, quoteContext?: string, quoteDate?: string) => {
-        if (!context || !ready) throw new Error('Wait for the vault to finish loading before saving a quote.');
-        const quote: Quote = {
-            id: crypto.randomUUID(), text, author, context: quoteContext, quote_date: quoteDate || null,
-            created_at: new Date().toISOString(), user_id: context.actorId,
-            vault_generation: context.generation, sync_status: 'pending'
-        };
+    const addQuote = useCallback(async (privateFields: { text: string; author: string; context?: string; source_sender?: string; import_source_id?: string }, quoteDate?: string) => {
+        if (!context || !ready || !encryptionKey) throw new Error('Wait for the vault to finish loading before saving a quote.');
+        const encrypted = await encryptQuoteRecord(privateFields, {
+            id: crypto.randomUUID(), quote_date: quoteDate || null, created_at: new Date().toISOString(),
+            user_id: context.actorId, vault_generation: context.generation
+        }, encryptionKey);
+        if (!isCiphertextWithinLimit(JSON.parse(String(encrypted.text).slice(7)))) {
+            throw new Error('This quote is too large to save. Shorten the quote or context and try again.');
+        }
+        const quote = { ...encrypted, sync_status: 'pending' } as unknown as Quote;
         const operation = createSyncOperation('INSERT', quote, context.actorId, context.generation);
         await db.transaction('rw', db.quotes, db.syncQueue, async () => {
             await db.quotes.put(quote);
             await db.syncQueue.put(operation);
         });
         void refresh();
-    }, [context, ready, refresh]);
+    }, [context, encryptionKey, ready, refresh]);
 
     const deleteQuote = useCallback(async (quote: Quote) => {
         if (!context || !ready) throw new Error('Wait for the vault to finish loading before deleting a quote.');

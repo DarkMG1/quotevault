@@ -1,4 +1,4 @@
-import { decryptData, encryptData } from './crypto';
+import { decryptQuoteRecord, encryptQuoteRecord } from './quote-crypto';
 import { supabase } from './supabase';
 import { isCiphertextWithinLimit, isDecryptedPayload } from '../components/ui';
 import type { Quote } from '../types';
@@ -8,7 +8,7 @@ export async function readQuotePayload(original: Quote, key: CryptoKey) {
     if (!original.text.startsWith('$$E2E$$') || original.sync_status === 'pending' || original.sync_status === 'rejected') {
         throw new Error('Sync this quote before editing.');
     }
-    const payload: unknown = JSON.parse(await decryptData(JSON.parse(original.text.slice(7)), key));
+    const payload: unknown = await decryptQuoteRecord(original, key);
     if (!isDecryptedPayload(payload)) throw new Error('This quote could not be decrypted safely.');
     return payload as typeof payload & { import_source_id?: string };
 }
@@ -18,9 +18,11 @@ async function buildEdit(original: Quote, changes: { text?: string; author: stri
     // Keep encrypted provenance and unedited fields exactly as stored.
     const updated = { ...payload, ...changes };
     if (!updated.text.trim() || !updated.author.trim()) throw new Error('Enter a quote and an author.');
-    const bundle = await encryptData(JSON.stringify(updated), key);
-    if (!isCiphertextWithinLimit(bundle)) throw new Error('This quote is too large to save.');
-    return { quote_id: original.id, expected_text: original.text, text: `$$E2E$$${JSON.stringify(bundle)}`, quote_date: quoteDate };
+    const encrypted = await encryptQuoteRecord(updated, { ...original, quote_date: quoteDate }, key);
+    const text = encrypted.text as string;
+    if (!text.startsWith('$$E2E$$')) throw new Error('This quote could not be encrypted safely.');
+    if (!isCiphertextWithinLimit(JSON.parse(text.slice(7)))) throw new Error('This quote is too large to save.');
+    return { quote_id: original.id, expected_text: original.text, text, quote_date: quoteDate };
 }
 
 async function editRequest(name: 'edit_quote' | 'edit_quotes', args: Record<string, unknown>, active: () => boolean) {

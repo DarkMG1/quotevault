@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { loadModule } from './load-module.mjs';
 const crypt = loadModule('src/lib/crypto.ts', {}, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob });
+const deviceCrypt = loadModule('src/lib/device-crypto.ts', { './crypto': crypt }, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob });
+const quoteCrypt = loadModule('src/lib/quote-crypto.ts', { './crypto': crypt, './device-crypto': deviceCrypt }, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob });
 const key = await crypt.deriveEncryptionKey('synthetic-import-key');
-const ui = loadModule('src/components/ui.ts', { react: {}, '../lib/crypto': crypt });
+const ui = loadModule('src/components/ui.ts', { react: {}, '../lib/quote-crypto': quoteCrypt });
 const storage = new Map();
 const queue = [];
 let handler;
@@ -12,7 +14,7 @@ const db = { metadata: { get: async id => storage.get(id), put: async value => s
   syncQueue: { toArray: async () => queue }, transaction: async (...args) => args.at(-1)() };
 const context = { actorId: '22222222-2222-4222-8222-222222222222', generation: '11111111-1111-4111-8111-111111111111' };
 const importer = loadModule('src/lib/quote-import.ts', {
-  './crypto': crypt, './db': { db }, '../components/ui': ui, './sync': { processSyncQueue: async () => true },
+  './crypto': crypt, './quote-crypto': quoteCrypt, './db': { db }, '../components/ui': ui, './sync': { processSyncQueue: async () => true },
   './supabase': { supabase: { rpc: (name, args) => ({ abortSignal: async () => { calls.push({name, args}); return handler(name, args); } }) } },
 }, { crypto: webcrypto, TextEncoder, AbortController, setTimeout, clearTimeout, navigator: { onLine: true } });
 const raw = { text: 'Synthetic private words', author: 'Ada', context: 'Synthetic context', source_sender: 'Grace',

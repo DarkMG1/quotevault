@@ -77,6 +77,8 @@ function runProvider(db, { userId = 'u1', generation = 'g1', legacyGeneration = 
     react: React, 'react/jsx-runtime': { jsx: (type, props) => ({ type, props }) },
     'dexie-react-hooks': { useLiveQuery: (_query, _deps, fallback) => fallback },
     '../lib/db': { db }, '../lib/sync': { cancelSyncRequests() {}, createSyncOperation() {}, enqueueDeleteMutation() {}, isTransientSyncFailure(error) { return error?.status === 503 || /failed to fetch/i.test(error?.message || ''); }, processSyncQueue },
+    '../lib/quote-crypto': { encryptQuoteRecord: async (privateFields, visibleFields) => ({ ...visibleFields, text: '$$E2E$$ciphertext' }) },
+    '../components/ui': { isCiphertextWithinLimit: () => true },
     '../lib/supabase': { supabase: { channel: () => ({ on() { return this; }, subscribe() { return { unsubscribe: async () => {} }; } }) } },
     './useAuth': { useAuth: () => ({ user: { id: userId }, canSync, retry }) },
     './useCrypto': { useCrypto: () => ({ vaultGeneration: generation, legacyVaultGeneration: legacyGeneration, lockVault() {} }) },

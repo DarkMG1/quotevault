@@ -3,12 +3,11 @@ import { Save, Quote as QuoteIcon, X } from 'lucide-react';
 import { useQuotes } from '../hooks/useQuotes';
 import { useAuth } from '../hooks/useAuth';
 import { useCrypto } from '../hooks/useCrypto';
-import { encryptData } from '../lib/crypto';
 import { saveQuoteEdit } from '../lib/quote-edit';
 import { isAdminUser } from '../lib/access';
 import type { Quote } from '../types';
 import { loadProfiles, type AuthorProfile } from '../lib/profile-cache';
-import { getErrorMessage, isCiphertextWithinLimit, localDateInputValue, useModalDialog } from './ui';
+import { getErrorMessage, localDateInputValue, useModalDialog } from './ui';
 
 interface AddQuoteProps { onClose: () => void; edit?: { stored: Quote; display: Quote }; }
 
@@ -88,13 +87,7 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
             const sourceSender = submitter ? authorLabel(submitter) :
                 [user?.user_metadata?.first_name, user?.user_metadata?.last_name].filter(value => typeof value === 'string' && value.trim()).join(' ');
             if (!user || !sourceSender.trim()) throw new Error('Your name is unavailable. Update your profile before submitting a quote.');
-            const payloadToEncrypt = JSON.stringify({ text: text.trim(), author: author.trim(), context: context.trim(), ...(sourceSender.trim() ? { source_sender: sourceSender.trim() } : {}) });
-            const encryptedBundle = await encryptData(payloadToEncrypt, encryptionKey);
-            if (!isCiphertextWithinLimit(encryptedBundle)) {
-                throw new Error('This quote is too large to save. Shorten the quote or context and try again.');
-            }
-            const serializedCiphertext = `$$E2E$$${JSON.stringify(encryptedBundle)}`;
-            await addQuote(serializedCiphertext, 'ENCRYPTED', 'ENCRYPTED', quoteDate);
+            await addQuote({ text: text.trim(), author: author.trim(), context: context.trim(), ...(sourceSender.trim() ? { source_sender: sourceSender.trim() } : {}) }, quoteDate);
             onClose();
         } catch (error: unknown) {
             setSaveError(getErrorMessage(error, 'Unable to save quote. Your draft is still here.'));

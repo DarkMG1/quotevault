@@ -6,9 +6,12 @@ const load = (path, dependencies, globals) => loadModule(path, dependencies, {
   console: { error() {} }, ...globals,
 });
 
+const cryptoModule = load('src/lib/crypto.ts', {}, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob, console });
+const deviceCrypto = load('src/lib/device-crypto.ts', { './crypto': cryptoModule }, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob });
+const quoteCrypto = load('src/lib/quote-crypto.ts', { './crypto': cryptoModule, './device-crypto': deviceCrypto }, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob });
 const ui = load('src/components/ui.ts', {
   react: { useEffect: () => {}, useRef: initial => ({ current: initial }) },
-  '../lib/crypto': { decryptData: async () => JSON.stringify({ text: 'decoded', author: 'Ada', context: 'letter', source_sender: 'Grace', id: 'evil', user_id: 'evil', sync_status: 'synced', extra: 'ignored' }) },
+  '../lib/quote-crypto': { decryptQuoteRecord: async () => ({ text: 'decoded', author: 'Ada', context: 'letter', source_sender: 'Grace', id: 'evil', user_id: 'evil', sync_status: 'synced', extra: 'ignored' }) },
 });
 
 const previousTimezone = process.env.TZ;
@@ -39,7 +42,7 @@ assert.equal(decrypted.sync_status, 'pending');
 
 const invalidPayloadUi = load('src/components/ui.ts', {
   react: { useEffect: () => {}, useRef: initial => ({ current: initial }) },
-  '../lib/crypto': { decryptData: async () => JSON.stringify({ text: 'decoded', author: 'Ada', source_sender: 42 }) },
+  '../lib/quote-crypto': { decryptQuoteRecord: async () => ({ text: 'decoded', author: 'Ada', source_sender: 42 }) },
 });
 const failedDecrypt = await invalidPayloadUi.decryptQuoteForDisplay({
   id: 'q2', text: '$$E2E$${"iv":"iv","data":"data"}', author: 'ENCRYPTED', source_sender: 'spoofed',
@@ -48,22 +51,20 @@ const failedDecrypt = await invalidPayloadUi.decryptQuoteForDisplay({
 assert.equal(failedDecrypt.text, '🔒 Encrypted Payload (Decryption Failed)');
 assert.equal('source_sender' in failedDecrypt, false, 'failed decrypts must not expose top-level provenance');
 
-const cryptoModule = load('src/lib/crypto.ts', {}, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob, console });
 const encryptedUi = load('src/components/ui.ts', {
   react: { useEffect: () => {}, useRef: initial => ({ current: initial }) },
-  '../lib/crypto': { decryptData: cryptoModule.decryptData },
+  '../lib/quote-crypto': quoteCrypto,
 });
 const encryptionKey = await cryptoModule.deriveEncryptionKey('test-only-password');
-const encryptedBundle = await cryptoModule.encryptData(JSON.stringify({ text: 'decoded', author: 'Ada', source_sender: 'Grace' }), encryptionKey);
-const roundTrip = await encryptedUi.decryptQuoteForDisplay({
-  id: 'q3', text: `$$E2E$$${JSON.stringify(encryptedBundle)}`, author: 'ENCRYPTED', source_sender: 'spoofed',
-  created_at: '2026-09-20T12:00:00Z', user_id: 'user-a', vault_generation: 'g1',
+const encryptedQuote = await quoteCrypto.encryptQuoteRecord({ text: 'decoded', author: 'Ada', source_sender: 'Grace' }, {
+  id: 'q3', created_at: '2026-09-20T12:00:00Z', user_id: 'user-a', vault_generation: 'g1', quote_date: null,
 }, encryptionKey);
+const roundTrip = await encryptedUi.decryptQuoteForDisplay(encryptedQuote, encryptionKey);
 assert.equal(roundTrip.source_sender, 'Grace');
 assert.equal(roundTrip.text, 'decoded');
 assert.equal(roundTrip.author, 'Ada');
 assert.equal(roundTrip.context, undefined, 'payloads without context remain valid');
-assert.equal(JSON.stringify(encryptedBundle).includes('Grace'), false, 'source sender stays inside ciphertext');
+assert.equal(JSON.stringify(encryptedQuote).includes('Grace'), false, 'source sender stays inside ciphertext');
 
 const legacyBundle = await cryptoModule.encryptData(JSON.stringify({ text: 'legacy', author: 'Ada' }), encryptionKey);
 const legacyRoundTrip = await encryptedUi.decryptQuoteForDisplay({
@@ -84,7 +85,6 @@ const components = load('src/components/AddQuote.tsx', {
   '../hooks/useQuotes': { useQuotes: () => ({ addQuote: async () => {} }) },
   '../hooks/useAuth': { useAuth: () => ({ user: {id: 'user-a', user_metadata: {first_name: 'Grace'}} }) },
   '../hooks/useCrypto': { useCrypto: () => ({ encryptionKey: {}, isLocked: false }) },
-  '../lib/crypto': { encryptData: async () => ({}) },
   '../lib/profile-cache': { loadProfiles: async () => [] },
   '../lib/quote-edit': { saveQuoteEdit: async () => {} },
   '../lib/access': { isAdminUser: () => false },
@@ -125,7 +125,6 @@ async function renderWithProfiles(edit) {
     '../hooks/useQuotes': { useQuotes: () => ({ addQuote: async () => {} }) },
     '../hooks/useAuth': { useAuth: () => ({ user: { id: 'user-a' } }) },
     '../hooks/useCrypto': { useCrypto: () => ({ encryptionKey: {}, isLocked: false }) },
-    '../lib/crypto': { encryptData: async () => ({}) },
     '../lib/profile-cache': { loadProfiles: async () => profiles },
     '../lib/quote-edit': { saveQuoteEdit: async () => {} },
     '../lib/access': { isAdminUser: () => false },
@@ -154,7 +153,6 @@ assert.equal(importedAuthor.states[1], 'Mystery & Outside Speaker & Ada Lovelace
 find(importedTree, node => node.type === 'input' && node.props.type === 'checkbox' && node.props.checked === true).props.onChange({ target: { checked: false } });
 assert.equal(importedAuthor.states[1], 'Mystery & Outside Speaker');
 
-const encryptedInputs = [];
 const submittedQuotes = [];
 let addQuoteState = 0;
 const submitComponents = load('src/components/AddQuote.tsx', {
@@ -168,7 +166,6 @@ const submitComponents = load('src/components/AddQuote.tsx', {
   '../hooks/useQuotes': { useQuotes: () => ({ addQuote: async (...quote) => { submittedQuotes.push(quote); } }) },
   '../hooks/useAuth': { useAuth: () => ({ user: {id: 'user-a', user_metadata: {first_name: 'Grace'}} }) },
   '../hooks/useCrypto': { useCrypto: () => ({ encryptionKey: {}, isLocked: false }) },
-  '../lib/crypto': { encryptData: async plaintext => { encryptedInputs.push(plaintext); return { iv: 'iv', data: 'data' }; } },
   '../lib/profile-cache': { loadProfiles: async () => [] },
   '../lib/quote-edit': { saveQuoteEdit: async () => {} },
   '../lib/access': { isAdminUser: () => false },
@@ -176,8 +173,7 @@ const submitComponents = load('src/components/AddQuote.tsx', {
 });
 const submitTree = submitComponents.AddQuote({ onClose: () => {} });
 await find(submitTree, node => node.type === 'form').props.onSubmit({ preventDefault() {} });
-assert.deepEqual(encryptedInputs, ['{"text":"quote","author":"Ada","context":"note","source_sender":"Grace"}']);
-assert.deepEqual(submittedQuotes, [['$$E2E$${"iv":"iv","data":"data"}', 'ENCRYPTED', 'ENCRYPTED', ui.localDateInputValue()]]);
+assert.equal(JSON.stringify(submittedQuotes), JSON.stringify([[{ text: 'quote', author: 'Ada', context: 'note', source_sender: 'Grace' }, ui.localDateInputValue()]]));
 
 const sessionDeferred = Promise.withResolvers();
 let authEvent;

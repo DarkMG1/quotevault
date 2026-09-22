@@ -1,5 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react';
-import { decryptData } from '../lib/crypto';
+import { decryptQuoteRecord } from '../lib/quote-crypto';
 import type { Quote } from '../types';
 
 export function localDateInputValue(date = new Date()): string {
@@ -36,9 +36,7 @@ export async function decryptQuoteForDisplay(quote: Quote, encryptionKey: Crypto
     if (!quote.text.startsWith('$$E2E$$')) return safeQuote;
     try {
         if (!encryptionKey) throw new Error('No key');
-        const bundle: unknown = JSON.parse(quote.text.replace('$$E2E$$', ''));
-        const plaintextJSON = await decryptData(bundle as Parameters<typeof decryptData>[0], encryptionKey);
-        const payload: unknown = JSON.parse(plaintextJSON);
+        const payload: unknown = await decryptQuoteRecord(quote, encryptionKey);
         if (!isDecryptedPayload(payload)) throw new Error('Invalid encrypted quote payload');
         return {
             ...safeQuote,

@@ -1,4 +1,5 @@
 import { decryptData, encryptData } from './crypto';
+import { decryptQuoteRecord, encryptQuoteRecord } from './quote-crypto';
 import { db } from './db';
 import { supabase } from './supabase';
 import { processSyncQueue, type SyncContext } from './sync';
@@ -119,7 +120,7 @@ export async function loadImportSnapshot(context: SyncContext, key: CryptoKey): 
     if (data?.generation !== context.generation || !Number.isSafeInteger(data.revision) || data.revision < 0 || !Array.isArray(data.quotes)) throw new Error('Could not verify the current vault snapshot.');
     const quotes = await Promise.all(data.quotes.map(async (row: Quote) => {
         if (row.vault_generation !== context.generation || typeof row.text !== 'string' || !row.text.startsWith('$$E2E$$')) throw new Error('An existing quote could not be checked safely.');
-        const payload: unknown = JSON.parse(await decryptData(JSON.parse(row.text.slice(7)), key));
+        const payload: unknown = await decryptQuoteRecord(row, key);
         if (!isDecryptedPayload(payload)) throw new Error('An existing encrypted quote is invalid.');
         const source = (payload as { import_source_id?: unknown }).import_source_id;
         if (source !== undefined && (typeof source !== 'string' || !/^[a-f0-9]{64}$/.test(source))) throw new Error('Invalid existing import identity.');
@@ -143,13 +144,15 @@ export async function prepareImport(rows: ImportRow[], snapshot: ImportSnapshot,
     if (rows.some(row => !row.text.trim() || !row.author.trim())) throw new Error('Every selected quote needs text and a person quoted.');
     if (!rows.length || rows.length > 500 || checkImports(rows, snapshot.quotes).some(check => check.duplicate)) throw new Error('Remove duplicate entries before importing.');
     const operations: ImportOperation[] = await Promise.all(rows.map(async row => {
-        const bundle = await encryptData(JSON.stringify({ text: row.text, author: row.author, context: row.context,
-            source_sender: row.source_sender, ...(row.import_source_id ? { import_source_id: row.import_source_id } : {}) }), key);
-        if (!isCiphertextWithinLimit(bundle)) throw new Error('A quote is too large to import.');
         const id = crypto.randomUUID();
+        const encrypted = await encryptQuoteRecord({ text: row.text, author: row.author, context: row.context,
+            source_sender: row.source_sender, ...(row.import_source_id ? { import_source_id: row.import_source_id } : {}) }, {
+            id, quote_date: row.quote_date, created_at: new Date().toISOString(), user_id: context.actorId,
+            vault_generation: context.generation,
+        }, key);
+        if (!isCiphertextWithinLimit(JSON.parse(String(encrypted.text).slice(7)))) throw new Error('A quote is too large to import.');
         return { operation_id: crypto.randomUUID(), action: 'INSERT', quote_id: id, actor_id: context.actorId,
-            vault_generation: context.generation, payload: { id, text: `$$E2E$$${JSON.stringify(bundle)}`, author: 'ENCRYPTED', context: 'ENCRYPTED',
-                quote_date: row.quote_date, created_at: new Date().toISOString(), user_id: context.actorId, vault_generation: context.generation } };
+            vault_generation: context.generation, payload: { ...encrypted, author: 'ENCRYPTED', context: 'ENCRYPTED' } as Quote };
     }));
     if (new TextEncoder().encode(JSON.stringify(operations)).length > MAX_BATCH_BYTES) throw new Error('Import is too large for one atomic batch. Select fewer quotes.');
     if (!active()) throw new Error('Vault access changed; unlock and review again.');
