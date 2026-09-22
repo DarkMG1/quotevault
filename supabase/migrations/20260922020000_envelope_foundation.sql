@@ -48,16 +48,39 @@ exception when others then
 end;
 $jwk$;
 
+create or replace function public.qv_public_key_fingerprint(p_jwk jsonb)
+returns text
+language plpgsql immutable
+set search_path = public, pg_temp
+as $fingerprint$
+declare
+  payload bytea;
+begin
+  if public.qv_valid_public_jwk(p_jwk) is not true then return null; end if;
+  payload := convert_to(jsonb_build_array(1, 'RSA-OAEP', 'SHA-256', p_jwk->>'n', p_jwk->>'e')::text, 'UTF8');
+  return rtrim(replace(replace(replace(encode(sha256(payload), 'base64'), E'\n', ''), '+', '-'), '/', '_'), '=');
+exception when others then
+  return null;
+end;
+$fingerprint$;
+
 create or replace function public.qv_valid_encrypted_bundle(p_bundle jsonb)
 returns boolean
 language plpgsql immutable
 set search_path = public, pg_temp
 as $bundle$
+declare
+  iv bytea;
+  data bytea;
 begin
-  return jsonb_typeof(p_bundle) = 'object'
-    and p_bundle->>'version' = '2'
-    and public.qv_base64url_bytes(p_bundle->>'iv', 12) is not null
-    and octet_length(public.qv_base64url_bytes(p_bundle->>'data', null)) >= 16
+  if jsonb_typeof(p_bundle) <> 'object' or p_bundle->>'version' <> '2' then return false; end if;
+  iv := decode(p_bundle->>'iv', 'base64');
+  data := decode(p_bundle->>'data', 'base64');
+  return octet_length(iv) = 12 and octet_length(data) >= 16
+    and replace(encode(iv, 'base64'), E'\n', '') = p_bundle->>'iv'
+    and replace(encode(data, 'base64'), E'\n', '') = p_bundle->>'data'
+    and p_bundle->>'iv' ~ '^[A-Za-z0-9+/]+={0,2}$'
+    and p_bundle->>'data' ~ '^[A-Za-z0-9+/]+={0,2}$'
     and octet_length(p_bundle::text) <= 65536;
 exception when others then
   return false;
@@ -170,7 +193,7 @@ create table if not exists public.vault_migration_quote_copies (
   migration_id uuid not null references public.vault_migrations(id) on delete cascade,
   copy_kind text not null check (copy_kind in ('staged', 'rollback')),
   quote_id uuid not null,
-  encrypted_row jsonb not null check (jsonb_typeof(encrypted_row) = 'object' and octet_length(encrypted_row::text) <= 300000 and public.qv_valid_migration_copy(encrypted_row)),
+  encrypted_row jsonb not null check (jsonb_typeof(encrypted_row) = 'object' and octet_length(encrypted_row::text) <= 300000 and encrypted_row->>'id' = quote_id::text and encrypted_row->>'vault_generation' = vault_generation::text and public.qv_valid_migration_copy(encrypted_row)),
   vault_generation uuid not null,
   primary key (migration_id, copy_kind, quote_id)
 );
@@ -231,7 +254,7 @@ end;
 $authorize$;
 
 create or replace function public.request_device(
-  p_owner_id uuid, p_label text, p_public_jwk jsonb, p_fingerprint text,
+  p_device_id uuid, p_owner_id uuid, p_label text, p_public_jwk jsonb, p_enrollment_fingerprint text,
   p_public_key_fingerprint text, p_token_digest text, p_protection_mode text,
   p_protection jsonb, p_encrypted_private_bundle jsonb, p_request_kind text
 )
@@ -246,16 +269,18 @@ begin
   if caller is null or p_owner_id is distinct from caller and public.qv_is_admin() is not true then raise exception 'Device request is not authorized' using errcode = '42501'; end if;
   if public.qv_is_active_profile(p_owner_id) is not true then raise exception 'QuoteVault membership is required' using errcode = '42501'; end if;
   if p_public_jwk is null or octet_length(p_public_jwk::text) > 32768 or public.qv_valid_public_jwk(p_public_jwk) is not true
+     or p_device_id is null
      or p_public_key_fingerprint !~ '^[A-Za-z0-9_-]{43}$'
-     or p_fingerprint !~ '^[A-Za-z0-9_-]{43}$'
+     or public.qv_public_key_fingerprint(p_public_jwk) is distinct from p_public_key_fingerprint
+     or p_enrollment_fingerprint !~ '^[A-Za-z0-9_-]{43}$'
      or p_token_digest !~ '^[A-Za-z0-9_-]{43}$'
      or p_protection_mode not in ('passkey-prf', 'remembered')
      or p_request_kind not in ('first', 'additional', 'recovery')
      or public.qv_valid_encrypted_bundle(p_encrypted_private_bundle) is not true then
     raise exception 'Invalid device enrollment metadata' using errcode = '22023';
   end if;
-  insert into public.vault_devices(owner_id, status, request_kind, expires_at, enrollment_fingerprint, public_jwk, public_key_fingerprint, authorization_token_digest, label, protection_mode, protection, encrypted_private_bundle)
-  values (p_owner_id, 'pending', p_request_kind, now() + interval '10 minutes', p_fingerprint, p_public_jwk, p_public_key_fingerprint, p_token_digest, left(p_label, 100), p_protection_mode, p_protection, p_encrypted_private_bundle)
+  insert into public.vault_devices(id, owner_id, status, request_kind, expires_at, enrollment_fingerprint, public_jwk, public_key_fingerprint, authorization_token_digest, label, protection_mode, protection, encrypted_private_bundle)
+  values (p_device_id, p_owner_id, 'pending', p_request_kind, now() + interval '10 minutes', p_enrollment_fingerprint, p_public_jwk, p_public_key_fingerprint, p_token_digest, left(p_label, 100), p_protection_mode, p_protection, p_encrypted_private_bundle)
   returning * into device;
   insert into public.vault_security_events(event_type, actor_id, affected_owner_id, affected_device_id, result, reason_code)
   values ('device_requested', caller, p_owner_id, device.id, 'ok', p_request_kind);
@@ -277,9 +302,10 @@ begin
     'request_id', request.id, 'owner_id', request.owner_id, 'request_kind', request.request_kind,
     'label', request.label, 'public_jwk', request.public_jwk,
     'public_key_fingerprint', request.public_key_fingerprint,
+    'authorization_token_digest', request.authorization_token_digest,
     'enrollment_fingerprint', request.enrollment_fingerprint,
     'protection_mode', request.protection_mode, 'protection', request.protection,
-    'encrypted_private_bundle', request.encrypted_private_bundle, 'expires_at', request.expires_at
+    'expires_at', request.expires_at
   );
 end;
 $get_request$;
@@ -335,10 +361,10 @@ begin
   if authorized is null then return null; end if;
   select * into wrapper from public.vault_device_wrappers where device_id = p_device_id and generation = p_generation and purpose = 'active';
   if not found then return null; end if;
-  update public.vault_devices set lease_expires_at = now() + interval '30 days', last_sync_at = now() where id = p_device_id;
+  update public.vault_devices set last_sync_at = now() where id = p_device_id;
   insert into public.vault_security_events(event_type, actor_id, affected_owner_id, affected_device_id, result, reason_code)
   values ('device_completed', auth.uid(), auth.uid(), p_device_id, 'ok', 'wrapper-issued');
-  return jsonb_build_object('device_id', p_device_id, 'generation', wrapper.generation, 'wrapped_key', wrapper.wrapped_key, 'lease_expires_at', now() + interval '30 days');
+  return jsonb_build_object('device_id', p_device_id, 'generation', wrapper.generation, 'wrapped_key', wrapper.wrapped_key, 'lease_expires_at', authorized->'lease_expires_at');
 end;
 $complete$;
 
@@ -394,13 +420,13 @@ revoke all on table public.vault_devices, public.vault_device_wrappers, public.v
 revoke all on function public.qv_envelope_legacy_mode() from public, anon, authenticated;
 grant execute on function public.qv_envelope_legacy_mode() to authenticated;
 revoke all on function public.qv_authorize_device(uuid, text, uuid, text) from public, anon, authenticated;
-revoke all on function public.request_device(uuid, text, jsonb, text, text, text, text, jsonb, jsonb, text) from public, anon, authenticated;
+revoke all on function public.request_device(uuid, uuid, text, jsonb, text, text, text, text, jsonb, jsonb, text) from public, anon, authenticated;
 revoke all on function public.get_device_request(uuid) from public, anon, authenticated;
 revoke all on function public.approve_device(uuid, uuid, text, text, text, uuid, uuid, text) from public, anon, authenticated;
 revoke all on function public.complete_device(uuid, text, uuid) from public, anon, authenticated;
 revoke all on function public.list_own_devices() from public, anon, authenticated;
 revoke all on function public.revoke_own_device(uuid, text) from public, anon, authenticated;
-grant execute on function public.request_device(uuid, text, jsonb, text, text, text, text, jsonb, jsonb, text) to authenticated;
+grant execute on function public.request_device(uuid, uuid, text, jsonb, text, text, text, text, jsonb, jsonb, text) to authenticated;
 grant execute on function public.get_device_request(uuid) to authenticated;
 grant execute on function public.approve_device(uuid, uuid, text, text, text, uuid, uuid, text) to authenticated;
 grant execute on function public.complete_device(uuid, text, uuid) to authenticated;
