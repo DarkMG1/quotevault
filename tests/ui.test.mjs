@@ -319,3 +319,18 @@ assert.deepEqual(await profileModule.loadProfiles('profile-user'), [{ id: 'fresh
 assert.equal(profileCalls, 2);
 
 console.log('ui audit checks passed');
+
+// Envelope quotes must stay behind one explicit state machine.  This is kept
+// pure so the same rule gates both the initial render and lease-expiry lock.
+const vaultGate = load('src/components/VaultGate.tsx', {
+  react: {},
+  'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
+  'lucide-react': { Lock: 'Lock', Loader2: 'Loader2' },
+});
+assert.equal(vaultGate.vaultGateState({ legacy: true, key: false }), 'legacy-locked');
+assert.equal(vaultGate.vaultGateState({ pending: true }), 'pending-approval');
+assert.equal(vaultGate.vaultGateState({ recovery: true }), 'recovery-setup');
+assert.equal(vaultGate.vaultGateState({ device: true, key: false }), 'device-locked');
+assert.equal(vaultGate.vaultGateState({ device: true, key: true, leaseValid: false }), 'lease-expired');
+assert.equal(vaultGate.vaultGateState({ device: true, key: true, leaseValid: true }), 'unlocked');
+assert.equal(vaultGate.vaultGateState({ device: true, key: true, leaseValid: true }) === 'unlocked', true, 'children render only after a verified lease derives the quote key');

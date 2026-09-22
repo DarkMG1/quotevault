@@ -2,7 +2,7 @@ import { AuthProvider, useAuth } from './hooks/useAuth';
 import { AuthUI } from './components/Auth';
 import { Layout } from './components/Layout';
 import { Feed } from './components/Feed';
-import { AdminDashboard } from './components/Admin';
+import { AdminDashboard, ApprovalRequest } from './components/Admin';
 import { Profile } from './components/Profile';
 import { CryptoProvider } from './hooks/useCrypto';
 import { QuotesProvider } from './hooks/useQuotes';
@@ -47,6 +47,10 @@ const ProtectedRoute = () => {
     </>;
   }
 
+  const approval = new URLSearchParams(currentPath.startsWith('#approve?') ? currentPath.slice('#approve?'.length) : '');
+  const requestId = approval.get('request');
+  const fingerprint = approval.get('fingerprint');
+
   return (
     <CryptoProvider key={user.id}>
       <QuotesProvider>
@@ -54,6 +58,8 @@ const ProtectedRoute = () => {
         {!canSync && <p role="status" className="p-4 text-sm text-slate-300">Using saved quotes on this device. Sync resumes when your session reconnects. <button onClick={retry} className="text-primary-400 underline">Retry connection</button></p>}
         {!canSync && (currentPath === '#admin' || currentPath === '#profile') ? (
           <p className="p-4">Connect and restore your session to manage account settings.</p>
+        ) : requestId && fingerprint ? (
+          <ApprovalRequest requestId={requestId} fingerprint={fingerprint} />
         ) : currentPath === '#admin' ? (
           <AdminDashboard />
         ) : currentPath === '#profile' ? (

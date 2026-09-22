@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
-import { LogOut, PlusCircle, Quote, ShieldAlert, UserCircle } from 'lucide-react';
+import { Lock, LogOut, PlusCircle, Quote, ShieldAlert, UserCircle } from 'lucide-react';
 import { isAdminUser } from '../lib/access';
 import { AddQuote } from './AddQuote';
 import { useAuth } from '../hooks/useAuth';
 import { getErrorMessage } from './ui';
+import { useCrypto } from '../hooks/useCrypto';
 
 export const Layout = ({ children, currentPath = '' }: { children: React.ReactNode, currentPath?: string }) => {
     const [isAddOpen, setIsAddOpen] = useState(false);
     const [isSigningOut, setIsSigningOut] = useState(false);
     const [signOutError, setSignOutError] = useState('');
     const { user, signOut } = useAuth();
+    const { lockVault } = useCrypto();
 
     const handleSignOut = async () => {
         if (isSigningOut) return;
@@ -52,6 +54,7 @@ export const Layout = ({ children, currentPath = '' }: { children: React.ReactNo
                             <ShieldAlert aria-hidden="true" className="w-5 h-5" />
                         </a>
                     )}
+                    <button onClick={lockVault} aria-label="Lock vault" className="p-2 text-slate-400 hover:text-primary-300 transition-colors rounded-full hover:bg-slate-800"><Lock aria-hidden="true" className="w-5 h-5" /></button>
                     <button
                         onClick={handleSignOut}
                         aria-label="Sign out"

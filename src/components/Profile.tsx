@@ -4,6 +4,7 @@ import { useAuth } from '../hooks/useAuth';
 import { clearProfileCache } from '../lib/profile-cache';
 import { UserCircle, Shield, Loader2, Save, KeyRound } from 'lucide-react';
 import { getErrorMessage } from './ui';
+import { DeviceSecurity } from './DeviceSecurity';
 
 export const Profile = () => {
     const { user } = useAuth();
@@ -246,6 +247,8 @@ export const Profile = () => {
                     </div>
                 </form>
             </div>
+
+            <DeviceSecurity />
         </div>
     );
 };
