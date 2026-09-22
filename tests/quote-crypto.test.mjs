@@ -38,7 +38,7 @@ test('rejects every authenticated metadata mismatch', async () => {
   const key = await cryptoApi.deriveEncryptionKey('test-passphrase');
   const stored = await quoteCrypto.encryptQuoteRecord(privateFields, visible, key);
   for (const field of ['id', 'vault_generation', 'user_id', 'created_at', 'quote_date']) {
-    const changed = { ...stored, [field]: field === 'quote_date' || field === 'created_at' ? '2030-01-01' : `different-${field}` };
+    const changed = { ...stored, [field]: field === 'quote_date' ? '2030-01-01' : field === 'created_at' ? '2030-01-01T00:00:00Z' : `different-${field}` };
     await assert.rejects(quoteCrypto.decryptQuoteRecord(changed, key), /authenticated metadata/);
   }
 });
@@ -49,7 +49,13 @@ test('canonicalizes equivalent timestamp spellings and rejects invalid timestamp
   const equivalent = { ...stored, created_at: '2026-09-22T15:00:00+00:00' };
   const decrypted = await quoteCrypto.decryptQuoteRecord(equivalent, key);
   assert.equal(decrypted.created_at, equivalent.created_at, 'server-visible timestamp is retained');
-  await assert.rejects(quoteCrypto.decryptQuoteRecord({ ...stored, created_at: 'not-a-timestamp' }, key), /Invalid quote metadata/);
+  const precise = await quoteCrypto.encryptQuoteRecord(privateFields, { ...visible, created_at: '2026-09-22T15:00:00.123000Z' }, key);
+  const preciseEquivalent = { ...precise, created_at: '2026-09-22T15:00:00.123+00:00' };
+  assert.equal((await quoteCrypto.decryptQuoteRecord(preciseEquivalent, key)).created_at, preciseEquivalent.created_at);
+  await assert.rejects(quoteCrypto.decryptQuoteRecord({ ...precise, created_at: '2026-09-22T15:00:00.123001+00:00' }, key), /authenticated metadata/);
+  for (const created_at of ['2026-02-30T00:00:00Z', '2025-02-29T00:00:00Z', '0000-01-01T00:00:00Z', '2026-09-22T15:00:00.1234567Z', '2026-09-22T15:00:00-04:00', 'not-a-timestamp']) {
+    await assert.rejects(quoteCrypto.encryptQuoteRecord(privateFields, { ...visible, created_at }, key), /Invalid quote metadata/);
+  }
 });
 
 test('reads legacy sentinel ciphertext during migration', async () => {

@@ -7,16 +7,32 @@ export const QUOTE_CIPHERTEXT_SENTINEL = '$$E2E$$';
 type QuoteMetadata = Pick<Quote, 'id' | 'vault_generation' | 'user_id' | 'created_at' | 'quote_date'>;
 type QuoteFields = Record<string, unknown>;
 
-const metadataOf = (quote: object): QuoteMetadata => {
-    const fields = quote as QuoteFields;
-    if (typeof fields.created_at !== 'string' || !Number.isFinite(new Date(fields.created_at).getTime())) {
+const canonicalTimestamp = (value: unknown): string => {
+    if (typeof value !== 'string') throw new Error('Invalid quote metadata.');
+    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(?:Z|\+00:00)$/.exec(value);
+    if (!match) throw new Error('Invalid quote metadata.');
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const hour = Number(match[4]);
+    const minute = Number(match[5]);
+    const second = Number(match[6]);
+    const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if (year === 0 || month < 1 || month > 12 || day < 1 || day > days[month - 1] || hour > 23 || minute > 59 || second > 59) {
         throw new Error('Invalid quote metadata.');
     }
+    const fraction = (match[7] ?? '').replace(/0+$/, '');
+    return `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}${fraction ? `.${fraction}` : ''}Z`;
+};
+
+const metadataOf = (quote: object): QuoteMetadata => {
+    const fields = quote as QuoteFields;
     return {
         id: fields.id as string,
         vault_generation: fields.vault_generation as string,
         user_id: fields.user_id as string,
-        created_at: new Date(fields.created_at).toISOString(),
+        created_at: canonicalTimestamp(fields.created_at),
         quote_date: fields.quote_date === undefined ? null : fields.quote_date as string | null,
     };
 };
