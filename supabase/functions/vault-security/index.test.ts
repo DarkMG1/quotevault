@@ -1,4 +1,4 @@
-import { encryptedRecoveryResponse, recoveryPublicKeyFingerprint, signLease, webauthnChallenge } from './index.ts';
+import { encryptedRecoveryResponse, recoveryPublicKeyFingerprint, signLease, validSessionInvalidation, webauthnChallenge } from './index.ts';
 import { verifyDeviceLeaseWithPublicKey } from '../../../src/lib/lease.ts';
 import type { DeviceLease, DeviceLeaseClaims } from '../../../src/types/index.ts';
 
@@ -46,4 +46,13 @@ Deno.test('WebAuthn challenges are fresh canonical 256-bit values for exact purp
     || !/^[A-Za-z0-9_-]{43}$/.test(registration.challenge)
     || registration.purpose !== 'registration' || restoration.purpose !== 'restoration'
     || webauthnChallenge('anything-else') !== null) throw new Error('invalid WebAuthn challenge response');
+});
+
+Deno.test('session invalidation accepts only the exact server proof for the requested owner', () => {
+  const ownerId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  if (!validSessionInvalidation({ owner_id: ownerId, status: 'removed' }, ownerId)
+    || validSessionInvalidation(null, ownerId)
+    || validSessionInvalidation({ owner_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', status: 'removed' }, ownerId)
+    || validSessionInvalidation({ owner_id: ownerId, status: 'active' }, ownerId)
+    || validSessionInvalidation({ owner_id: ownerId, status: 'removed', extra: true }, ownerId)) throw new Error('session invalidation proof was not exact');
 });

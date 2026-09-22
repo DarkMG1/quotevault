@@ -35,6 +35,7 @@ psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922070000_b
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922080000_device_authorized_rpcs.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-auth.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922090000_device_authorized_rpc_fixes.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922110000_bootstrap_state_rpc.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-auth-fixes.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922100000_device_recovery_requirement.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-bootstrap.sql

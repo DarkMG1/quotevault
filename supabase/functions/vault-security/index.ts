@@ -108,6 +108,12 @@ export const webauthnChallenge = (purpose: unknown): { purpose: 'registration' |
   return { purpose, challenge: base64url(crypto.getRandomValues(new Uint8Array(32))) };
 };
 
+export const validSessionInvalidation = (value: unknown, ownerId: string): boolean => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const result = value as Record<string, unknown>;
+  return Object.keys(result).length === 2 && result.owner_id === ownerId && result.status === 'removed';
+};
+
 const serve = async (request: Request): Promise<Response> => {
   if (request.method === 'OPTIONS') return new Response(null, { headers: { 'access-control-allow-origin': 'https://quotes.darkmg1.dev', 'access-control-allow-headers': 'authorization, content-type', 'access-control-allow-methods': 'POST, OPTIONS', 'vary': 'Origin' } });
   if (request.method !== 'POST') return reply(405, { error: 'method_not_allowed' });
@@ -147,6 +153,8 @@ const serve = async (request: Request): Promise<Response> => {
   }
   if (body.action === 'invalidate_member_session') {
     if (typeof body.ownerId !== 'string' || !UUID.test(body.ownerId)) return reply(400, { error: 'invalid_request' });
+    const { data: verified, error: verificationError } = await userClient.rpc('verify_member_session_invalidation', { p_owner_id: body.ownerId });
+    if (verificationError || !validSessionInvalidation(verified, body.ownerId)) return reply(403, { error: 'session_invalidation_denied' });
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     if (!serviceKey) return reply(500, { error: 'configuration_error' });
     const serviceClient = createClient(url, serviceKey);

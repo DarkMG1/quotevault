@@ -17,6 +17,13 @@ const importer = loadModule('src/lib/quote-import.ts', {
   './crypto': crypt, './quote-crypto': quoteCrypt, './db': { db }, '../components/ui': ui, './sync': { processSyncQueue: async () => true },
   './supabase': { supabase: { rpc: (name, args) => ({ abortSignal: async () => { calls.push({name, args}); return handler(name, args); } }) } },
 }, { crypto: webcrypto, TextEncoder, AbortController, setTimeout, clearTimeout, navigator: { onLine: true } });
+let editHandler;
+const editorCalls = [];
+const editor = loadModule('src/lib/quote-edit.ts', {
+  './crypto': crypt, './quote-crypto': quoteCrypt, '../components/ui': ui,
+  './quote-authors': { matchedAuthorContext: (_before, after, context) => context },
+  './supabase': { supabase: { rpc: (name, args) => ({ abortSignal: async () => { editorCalls.push({ name, args }); return editHandler(name, args); } }) } },
+}, { crypto: webcrypto, TextEncoder, AbortController, setTimeout, clearTimeout, navigator: { onLine: true } });
 const raw = { text: 'Synthetic private words', author: 'Ada', context: 'Synthetic context', source_sender: 'Grace',
   source: { id: 'a'.repeat(64), timestamp: 'Sep 21, 2026  1:00:00 PM' } };
 const file = value => JSON.stringify({ format: 'quotevault-reviewed-quotes', version: 1, quotes: value });
@@ -37,6 +44,19 @@ const encrypted = await crypt.encryptData(JSON.stringify({text: 'Existing', auth
 handler = async () => ({ data: { generation: context.generation, revision: 3, quotes: [{ vault_generation: context.generation, text: '$$E2E$$' + JSON.stringify(encrypted) }] } });
 const snapshot = await importer.loadImportSnapshot(context, key);
 assert.equal(snapshot.quotes[0].text, 'Existing');
+context.getDeviceAuthorization = async () => ({ deviceId: '33333333-3333-4333-8333-333333333333', token: 'transient-token' });
+await importer.loadImportSnapshot(context, key);
+assert.equal(calls.at(-1).args.p_device_id, '33333333-3333-4333-8333-333333333333');
+assert.equal(calls.at(-1).args.p_device_token, 'transient-token');
+assert.equal(JSON.stringify(calls.at(-1).args).includes('Synthetic private words'), false);
+const editable = await quoteCrypt.encryptQuoteRecord({ text: 'Existing', author: 'Ada', context: '' },
+  { id: '44444444-4444-4444-8444-444444444444', quote_date: '2026-09-21', created_at: '2026-09-21T00:00:00.000Z', user_id: context.actorId, vault_generation: context.generation }, key);
+const original = { ...editable, author: 'ENCRYPTED', context: 'ENCRYPTED', sync_status: 'synced' };
+editHandler = async () => ({ data: null, error: null });
+await assert.rejects(editor.saveQuoteEdit(original, { text: 'Changed', author: 'Ada', context: '', quoteDate: '2026-09-21' }, key, () => true, context.getDeviceAuthorization), /Device authorization/);
+assert.equal(editorCalls.at(-1).args.p_device_id, '33333333-3333-4333-8333-333333333333');
+assert.equal(editorCalls.at(-1).args.p_device_token, 'transient-token');
+assert.equal(JSON.stringify(editorCalls.at(-1).args).includes('Changed'), false);
 queue.push({ actor_id: context.actorId, vault_generation: context.generation });
 await assert.rejects(importer.loadImportSnapshot(context, key), /pending/);
 queue.length = 0;

@@ -55,4 +55,21 @@ $remove$;
 revoke all on function public.remove_member_access(uuid, uuid, text) from public, anon, authenticated;
 grant execute on function public.remove_member_access(uuid, uuid, text) to authenticated;
 
+create or replace function public.verify_member_session_invalidation(p_owner_id uuid)
+returns jsonb language plpgsql security definer stable set search_path = public, pg_temp
+as $verify$
+declare member_email text;
+begin
+  if p_owner_id is null or public.qv_is_admin() is not true or public.qv_is_member() is not true then return null; end if;
+  select email into member_email from auth.users where id = p_owner_id;
+  if not found or exists(select 1 from public.allowlist where lower(email) = lower(member_email))
+     or exists(select 1 from public.vault_devices where owner_id = p_owner_id and status <> 'revoked')
+     or exists(select 1 from public.vault_recovery_keys where owner_id = p_owner_id and status <> 'revoked') then return null; end if;
+  return jsonb_build_object('owner_id', p_owner_id, 'status', 'removed');
+end;
+$verify$;
+
+revoke all on function public.verify_member_session_invalidation(uuid) from public, anon, authenticated;
+grant execute on function public.verify_member_session_invalidation(uuid) to authenticated;
+
 commit;

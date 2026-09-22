@@ -7,9 +7,10 @@ export interface SyncContext {
     generation: string;
     legacyGeneration?: string | null;
     getDeviceAuthorization?: () => Promise<{ deviceId: string; token: string }>;
-    renewLease?: () => Promise<void>;
+    renewLease?: (authorization: DeviceAuthorization) => Promise<void>;
     onGenerationMismatch?: () => void;
 }
+export interface DeviceAuthorization { deviceId: string; token: string }
 
 const revisionKey = (actorId: string, generation: string) => `sync-revision:${actorId}:${generation}`;
 // The RPC rejects a JSON operation list over 1 MiB. Leave room for the RPC's
@@ -211,7 +212,7 @@ async function rejectOversizedOperations(items: SyncQueueItem[]) {
     });
 }
 
-async function syncBatch(context: SyncContext, epoch: number): Promise<{ more: boolean; performed: boolean }> {
+async function syncBatch(context: SyncContext, epoch: number, authorization: DeviceAuthorization | null): Promise<{ more: boolean; performed: boolean }> {
     if (!navigator.onLine) return { more: false, performed: false };
     await adoptLegacyOperations(context);
     const revision = (await db.metadata.get(revisionKey(context.actorId, context.generation)))?.value ?? null;
@@ -246,23 +247,22 @@ async function syncBatch(context: SyncContext, epoch: number): Promise<{ more: b
     let data: unknown;
     let error: unknown;
     let status: number | undefined;
-    const authorization = context.getDeviceAuthorization
-        ? await context.getDeviceAuthorization()
-        : { deviceId: null, token: null };
+    const deviceId = authorization?.deviceId ?? null;
+    const deviceToken = authorization?.token ?? null;
     try {
         // Auth restoration can stall before fetch sees the abort signal.
         ({ data, error, status } = await Promise.race([supabase.rpc('sync_quotes', {
             p_generation: context.generation,
             p_revision: revision,
             p_operations: operations,
-            p_device_id: authorization.deviceId,
-            p_device_token: authorization.token,
+            p_device_id: deviceId,
+            p_device_token: deviceToken,
         }).abortSignal(controller.signal), deadline]));
     } finally {
         window.clearTimeout(timeout);
         if (activeAbortController === controller) activeAbortController = null;
     }
-    if (error) throw Object.assign(new Error(error.message || 'Unable to synchronize. Changes remain on this device.'), error, { status });
+    if (error) { const message = typeof (error as { message?: unknown }).message === 'string' ? (error as { message: string }).message : 'Unable to synchronize. Changes remain on this device.'; throw Object.assign(new Error(message), error, { status }); }
     if (data === null) throw Object.assign(new Error('Device authorization was denied. Unlock this device and retry synchronization.'), { code: '42501', status: 403 });
     if (epoch !== syncEpoch) return { more: false, performed: true };
     const sentIds = new Set(operations.map(operation => operation.operation_id));
@@ -300,7 +300,6 @@ async function syncBatch(context: SyncContext, epoch: number): Promise<{ more: b
         }
     });
     if (epoch !== syncEpoch) return { more: false, performed: true };
-    if (context.renewLease) await context.renewLease();
     const remaining = (await db.syncQueue.toArray()).some(item =>
         item.actor_id === context.actorId && item.vault_generation === context.generation && item.status !== 'rejected' && item.status !== 'blocked'
     );
@@ -309,11 +308,15 @@ async function syncBatch(context: SyncContext, epoch: number): Promise<{ more: b
 
 async function sync(context: SyncContext, epoch: number) {
     let performed = false;
+    const authorization = context.getDeviceAuthorization ? await context.getDeviceAuthorization() : null;
     while (epoch === syncEpoch) {
         const request = syncRequest;
-        const result = await syncBatch(context, epoch);
+        const result = await syncBatch(context, epoch, authorization);
         performed ||= result.performed;
-        if (!result.more && request === syncRequest) return performed;
+        if (!result.more && request === syncRequest) {
+            if (performed && authorization && context.renewLease) await context.renewLease(authorization);
+            return performed;
+        }
     }
     return performed;
 }

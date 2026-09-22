@@ -67,6 +67,10 @@ begin
      or state->'kdf' is null or state->'verifier' is null or not state ? 'prepared_generation' then
     raise exception 'legacy bootstrap response changed';
   end if;
+  state := public.get_vault_bootstrap_state();
+  if state->>'envelope_status' <> 'legacy' or state->'kdf' is null or state->'verifier' is null then
+    raise exception 'legacy bootstrap metadata response changed';
+  end if;
 
   insert into public.vault_devices(id, owner_id, status, request_kind, expires_at, enrollment_fingerprint, public_jwk, public_key_fingerprint, authorization_token_digest, label, protection_mode, protection, encrypted_private_bundle, lease_expires_at)
   values
@@ -105,6 +109,11 @@ begin
   if state->>'envelope_status' <> 'active' or state->>'generation' is null or not state ? 'prepared_generation'
      or state ? 'kdf' or state ? 'verifier' or state ? 'legacy_generation' then
     raise exception 'active bootstrap leaked legacy verifier material';
+  end if;
+  state := public.get_vault_bootstrap_state();
+  if state->>'envelope_status' <> 'active' or state->'kdf' is not null or state->'verifier' is not null
+     or state->'generation' is null or not state ? 'prepared_generation' then
+    raise exception 'active bootstrap metadata leaked verifier material';
   end if;
 
   insert into public.vault_device_wrappers(device_id, generation, purpose, wrapped_key)

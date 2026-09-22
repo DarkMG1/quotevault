@@ -29,7 +29,7 @@ const activeIdentityKey = 'sync-active-identity';
 
 export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
     const { user, canSync, retry: retrySession } = useAuth();
-    const { encryptionKey, vaultGeneration, legacyVaultGeneration, lockVault, getDeviceAuthorization, renewDeviceLease } = useCrypto();
+    const { encryptionKey, vaultGeneration, legacyVaultGeneration, lockVault, getDeviceAuthorization, renewDeviceLease, deviceId } = useCrypto();
     const [initializedIdentity, setInitializedIdentity] = useState<string | null>(null);
     const [lastSync, setLastSync] = useState<{ identity: string; at: string } | null>(null);
     const [syncError, setSyncError] = useState('');

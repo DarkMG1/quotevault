@@ -53,7 +53,7 @@ begin
   members := public.list_members(admin_device, token);
   if members->1->>'id' <> member_allowlist_id::text or members->1->>'first_name' <> 'Member' then raise exception 'member listing did not resolve profile through auth email'; end if;
   response := public.remove_member_access(other_allowlist_id, admin_device, token);
-  if response->>'status' <> 'removed' or exists(select 1 from public.allowlist where id = other_allowlist_id)
+  if response->>'status' <> 'removed' or response->>'owner_id' <> other_id::text or exists(select 1 from public.allowlist where id = other_allowlist_id)
      or exists(select 1 from public.vault_devices where owner_id = other_id and status <> 'revoked')
      or exists(select 1 from public.vault_device_wrappers w join public.vault_devices d on d.id = w.device_id where d.owner_id = other_id)
      or exists(select 1 from public.vault_recovery_wrappers w join public.vault_recovery_keys k on k.id = w.recovery_key_id where k.owner_id = other_id)
@@ -62,6 +62,16 @@ begin
      or exists(select 1 from public.vault_recovery_keys where id = recovery_id and status <> 'revoked') then
     raise exception 'removal did not map allowlist identity to auth-owned records';
   end if;
+  if (public.verify_member_session_invalidation(other_id)->>'owner_id' <> other_id::text
+     or (public.verify_member_session_invalidation(member_id)) is not null
+     or (public.verify_member_session_invalidation(null)) is not null then
+    raise exception 'session invalidation proof did not bind removed owner';
+  end if;
+  perform set_config('request.jwt.claim.sub', member_id::text, true);
+  if public.verify_member_session_invalidation(other_id) is not null then
+    raise exception 'non-admin session invalidation proof was accepted';
+  end if;
+  perform set_config('request.jwt.claim.sub', admin_id::text, true);
 
   update public.vault_state set envelope_status = 'active' where singleton;
   if public.sync_quotes(generation, null, '[]', null, null) is not null

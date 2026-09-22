@@ -131,9 +131,10 @@ await (async () => {
   const { db, sync, rpcCalls } = setup();
   await enqueue(db, sync, 'INSERT', quote('authorized'));
   let renewals = 0;
+  let authorizations = 0;
   await sync.processSyncQueue({
     actorId: 'u1', generation: 'g1',
-    getDeviceAuthorization: async () => ({ deviceId: '11111111-1111-4111-8111-111111111111', token: 'transient-token' }),
+    getDeviceAuthorization: async () => { authorizations++; return { deviceId: '11111111-1111-4111-8111-111111111111', token: 'transient-token' }; },
     renewLease: async () => { renewals++; },
   });
   assert.equal(rpcCalls[0].p_generation, 'g1');
@@ -264,9 +265,15 @@ await (async () => {
 
 await (async () => {
   const { db, sync, rpcCalls } = setup();
+  let renewals = 0;
+  let authorizations = 0;
   for (let index = 0; index < 51; index++) await enqueue(db, sync, 'INSERT', quote(`batch-${index}`));
-  await sync.processSyncQueue({ actorId: 'u1', generation: 'g1' });
+  await sync.processSyncQueue({ actorId: 'u1', generation: 'g1',
+    getDeviceAuthorization: async () => { authorizations++; return { deviceId: '11111111-1111-4111-8111-111111111111', token: 'transient-token' }; },
+    renewLease: async () => { renewals++; } });
   assert.deepEqual(rpcCalls.map(call => call.p_operations.length), [50, 1], 'the queue drains batches without sending more than 50 operations');
+  assert.equal(authorizations, 1, 'a multi-batch sync cycle obtains transient authorization once');
+  assert.equal(renewals, 1, 'a multi-batch sync cycle renews the lease once');
 })();
 
 await (async () => {

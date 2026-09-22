@@ -22,7 +22,7 @@ interface CryptoContextType {
     encryptionKey: CryptoKey | null; isLocked: boolean; vaultGeneration: string | null; legacyVaultGeneration: string | null;
     deviceId: string | null; leaseExpiresAt: number | null;
     getDeviceAuthorization: () => Promise<{ deviceId: string; token: string }>;
-    renewDeviceLease: () => Promise<void>;
+    renewDeviceLease: (authorization: { deviceId: string; token: string }) => Promise<void>;
     lockVault: () => void; forgetDevice: () => Promise<void>; approveDeviceRequest: (requestId: string, fingerprint: string, code: string) => Promise<void>;
     setupRecovery: (phrase: string, replace?: boolean) => Promise<void>; recoverDevice: (phrase: string, mode: 'remembered' | 'passkey-prf') => Promise<void>;
     findPasskeyRestores: () => Promise<string[]>; restorePasskeyDevice: (deviceId: string) => Promise<void>;
@@ -39,8 +39,9 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
     const [deviceState, setDeviceState] = useState<DeviceLocalState | null>(null); const [leaseExpiresAt, setLeaseExpiresAt] = useState<number | null>(null); const [leaseExpired, setLeaseExpired] = useState(false); const [pendingRequest, setPendingRequest] = useState<{ requestId: string; fingerprint: string; code: string } | null>(null); const [passkeyRestores, setPasskeyRestores] = useState<string[]>([]); const [recoveryRequired, setRecoveryRequired] = useState(false);
     const request = useRef(0), unlockRequest = useRef(0), keyGeneration = useRef<string | null>(null);
     const masterKey = useRef<Uint8Array | null>(null);
+    const authorization = useRef<{ deviceId: string; token: string } | null>(null);
     const userId = user?.id;
-    const clearKeys = useCallback(() => { masterKey.current?.fill(0); masterKey.current = null; keyGeneration.current = null; setEncryptionKey(null); setLeaseExpiresAt(null); }, []);
+    const clearKeys = useCallback(() => { masterKey.current?.fill(0); masterKey.current = null; authorization.current = null; keyGeneration.current = null; setEncryptionKey(null); setLeaseExpiresAt(null); }, []);
     const refreshSettings = useCallback(async () => {
         if (!userId) return; const version = ++request.current;
         try { const next = await loadVaultState(userId, !canSync); if (request.current !== version) return;
@@ -65,7 +66,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
             else if (!await validLease(local, vault.generation)) { if (!canSync || !navigator.onLine) throw new Error('This device lease has expired. Connect to renew authorization.'); local = await renewDeviceLease({ accountId: user.id, deviceId: local.deviceId, token: bundle.authorizationToken, generation: vault.generation, publicKeyFingerprint: local.publicKeyFingerprint }); }
             if (!await validLease(local, vault.generation) || !local.wrapper || local.wrapper.generation !== vault.generation) throw new Error('Device authorization is invalid.');
             const opened = await unwrapVaultKey(local.wrapper.wrappedKey, bundle.privateKey, { vaultId: 'quotevault', generation: vault.generation, targetFingerprint: local.publicKeyFingerprint }); const quoteKey = await deriveQuoteKey(opened, vault.generation);
-            if (unlockRequest.current !== version) { opened.fill(0); return; } clearKeys(); masterKey.current = opened; keyGeneration.current = vault.generation; setDeviceState(local); setLeaseExpired(false); setLeaseExpiresAt(local.lease?.claims[5] ?? null); setRecoveryRequired(needsRecoverySetup(local)); setEncryptionKey(quoteKey);
+            if (unlockRequest.current !== version) { opened.fill(0); return; } clearKeys(); authorization.current = { deviceId: local.deviceId, token: bundle.authorizationToken }; masterKey.current = opened; keyGeneration.current = vault.generation; setDeviceState(local); setLeaseExpired(false); setLeaseExpiresAt(local.lease?.claims[5] ?? null); setRecoveryRequired(needsRecoverySetup(local)); setEncryptionKey(quoteKey);
         } catch (cause) { if (unlockRequest.current === version) setError(cause instanceof Error ? cause.message : 'Could not unlock this device.'); }
         finally { if (unlockRequest.current === version) setBusy(false); }
     }, [canSync, clearKeys, user, validLease]);
@@ -93,19 +94,20 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
     const getDeviceAuthorization = useCallback(async () => {
         if (!encryptionKey || !user) throw new Error('Unlock an approved device first.');
         const local = await loadDeviceState(user.id); if (!local) throw new Error('Device enrollment state is missing.');
+        if (authorization.current?.deviceId === local.deviceId) return authorization.current;
         const key = local.protectionMode === 'remembered' ? local.rememberedKey : await unlockPasskey(local.protection as never);
         if (!key) throw new Error('Unlock this device to authorize the request.');
         const bundle = await decryptDeviceBundle(local, key);
-        return { deviceId: local.deviceId, token: bundle.authorizationToken };
+        authorization.current = { deviceId: local.deviceId, token: bundle.authorizationToken };
+        return authorization.current;
     }, [encryptionKey, user]);
-    const renewAuthorizationLease = useCallback(async () => {
+    const renewAuthorizationLease = useCallback(async (auth: { deviceId: string; token: string }) => {
         const vault = stateRef.current;
         if (!user || !vault || isLegacyVaultState(vault) || !deviceState) return;
-        const auth = await getDeviceAuthorization();
         const next = await renewDeviceLease({ accountId: user.id, deviceId: auth.deviceId, token: auth.token,
             generation: vault.generation, publicKeyFingerprint: deviceState.publicKeyFingerprint });
         setDeviceState(next); setLeaseExpired(false); setLeaseExpiresAt(next.lease?.claims[5] ?? null);
-    }, [deviceState, getDeviceAuthorization, user]);
+    }, [deviceState, user]);
     const forgetDevice = useCallback(async () => {
         const local = deviceState; if (local && canSync && navigator.onLine) { const auth = await getDeviceAuthorization(); await revokeOwnDevice(local.deviceId, auth.token); }
         await clearLocalSyncState(); await db.deviceState.clear(); if (user) { clearCachedVaultState(user.id); clearProfileCache(user.id); }
