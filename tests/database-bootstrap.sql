@@ -111,19 +111,19 @@ begin
   values (passkey_id, (state->>'generation')::uuid, 'active', repeat('A', 512)),
          (remembered_id, (state->>'generation')::uuid, 'active', repeat('A', 512));
   restored := public.complete_device(passkey_id, device_token, (state->>'generation')::uuid);
-  if restored->'recovery_setup_required' is distinct from 'true'::jsonb then
+  if restored->'recovery_setup_required' is distinct from 'true'::jsonb or restored->>'active_recovery_key_id' is not null then
     raise exception 'first completion did not require recovery setup';
   end if;
   insert into public.vault_recovery_keys(id, owner_id, status, public_jwk, public_key_fingerprint, encrypted_private_key, kdf, confirmed_at)
   values (recovery_key_id, member_id, 'active', public_jwk, fingerprint, bundle,
     jsonb_build_object('version', 1, 'salt', 'AAAAAAAAAAAAAAAAAAAAAA==', 'iterations', 600000), now());
   restored := public.complete_device(remembered_id, device_token, (state->>'generation')::uuid);
-  if restored->'recovery_setup_required' is distinct from 'false'::jsonb then
+  if restored->'recovery_setup_required' is distinct from 'false'::jsonb or restored->>'active_recovery_key_id' <> recovery_key_id::text then
     raise exception 'additional completion ignored active recovery setup';
   end if;
   update public.vault_devices set request_kind = 'recovery' where id = passkey_id;
   restored := public.complete_device(passkey_id, device_token, (state->>'generation')::uuid);
-  if restored->'recovery_setup_required' is distinct from 'false'::jsonb then
+  if restored->'recovery_setup_required' is distinct from 'false'::jsonb or restored->>'active_recovery_key_id' <> recovery_key_id::text then
     raise exception 'passkey or recovery completion ignored active recovery setup';
   end if;
 end $$;
