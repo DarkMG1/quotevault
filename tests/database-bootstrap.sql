@@ -10,7 +10,10 @@ declare
   remembered_id uuid := '33333333-3333-4333-8333-333333333333';
   malformed_active_id uuid := '44444444-4444-4444-8444-444444444444';
   malformed_pending_id uuid := '55555555-5555-4555-8555-555555555555';
+  recovery_key_id uuid := '66666666-6666-4666-8666-666666666666';
   token_digest text := 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  device_token text := 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
+  device_digest text := rtrim(replace(replace(replace(encode(sha256(decode('AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8' || '=', 'base64')), 'base64'), E'\n', ''), '+', '-'), '/', '_'), '=');
   credential_1024 text := rtrim(replace(replace(replace(encode(decode(repeat('00', 1024), 'hex'), 'base64'), E'\n', ''), '+', '-'), '/', '_'), '=');
   public_jwk jsonb := jsonb_build_object('kty', 'RSA', 'n', rtrim(replace(replace(replace(encode(decode('80' || repeat('00', 383), 'hex'), 'base64'), E'\n', ''), '+', '-'), '/', '_'), '='), 'e', 'AQAB');
   fingerprint text;
@@ -67,8 +70,8 @@ begin
 
   insert into public.vault_devices(id, owner_id, status, request_kind, expires_at, enrollment_fingerprint, public_jwk, public_key_fingerprint, authorization_token_digest, label, protection_mode, protection, encrypted_private_bundle, lease_expires_at)
   values
-    (passkey_id, member_id, 'active', 'first', null, token_digest, public_jwk, fingerprint, token_digest, 'passkey restore', 'passkey-prf', passkey_protection, bundle, now() + interval '1 day'),
-    (remembered_id, member_id, 'active', 'first', null, token_digest, public_jwk, fingerprint, token_digest, 'remembered restore', 'remembered', remembered_protection, bundle, now() + interval '1 day'),
+    (passkey_id, member_id, 'active', 'first', null, token_digest, public_jwk, fingerprint, device_digest, 'passkey restore', 'passkey-prf', passkey_protection, bundle, now() + interval '1 day'),
+    (remembered_id, member_id, 'active', 'first', null, token_digest, public_jwk, fingerprint, device_digest, 'remembered restore', 'remembered', remembered_protection, bundle, now() + interval '1 day'),
     (malformed_active_id, member_id, 'active', 'first', null, token_digest, public_jwk, fingerprint, token_digest, 'malformed passkey', 'passkey-prf', '{"version":1}'::jsonb, bundle, now() + interval '1 day'),
     (malformed_pending_id, member_id, 'pending', 'first', now() + interval '1 day', token_digest, public_jwk, fingerprint, token_digest, 'malformed pending', 'remembered', '{"version":1}'::jsonb, bundle, null);
   restored := public.get_passkey_restore_devices();
@@ -102,6 +105,26 @@ begin
   if state->>'envelope_status' <> 'active' or state->>'generation' is null or not state ? 'prepared_generation'
      or state ? 'kdf' or state ? 'verifier' or state ? 'legacy_generation' then
     raise exception 'active bootstrap leaked legacy verifier material';
+  end if;
+
+  insert into public.vault_device_wrappers(device_id, generation, purpose, wrapped_key)
+  values (passkey_id, (state->>'generation')::uuid, 'active', repeat('A', 512)),
+         (remembered_id, (state->>'generation')::uuid, 'active', repeat('A', 512));
+  restored := public.complete_device(passkey_id, device_token, (state->>'generation')::uuid);
+  if restored->'recovery_setup_required' is distinct from 'true'::jsonb then
+    raise exception 'first completion did not require recovery setup';
+  end if;
+  insert into public.vault_recovery_keys(id, owner_id, status, public_jwk, public_key_fingerprint, encrypted_private_key, kdf, confirmed_at)
+  values (recovery_key_id, member_id, 'active', public_jwk, fingerprint, bundle,
+    jsonb_build_object('version', 1, 'salt', 'AAAAAAAAAAAAAAAAAAAAAA==', 'iterations', 600000), now());
+  restored := public.complete_device(remembered_id, device_token, (state->>'generation')::uuid);
+  if restored->'recovery_setup_required' is distinct from 'false'::jsonb then
+    raise exception 'additional completion ignored active recovery setup';
+  end if;
+  update public.vault_devices set request_kind = 'recovery' where id = passkey_id;
+  restored := public.complete_device(passkey_id, device_token, (state->>'generation')::uuid);
+  if restored->'recovery_setup_required' is distinct from 'false'::jsonb then
+    raise exception 'passkey or recovery completion ignored active recovery setup';
   end if;
 end $$;
 

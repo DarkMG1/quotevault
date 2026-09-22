@@ -32,6 +32,10 @@ psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922050000_r
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-recovery.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922060000_device_bootstrap.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922070000_bootstrap_contract_hardening.sql
+for migration in supabase/migrations/20260922080000_*.sql supabase/migrations/20260922090000_*.sql; do
+  test -f "$migration" && psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f "$migration"
+done
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922100000_device_recovery_requirement.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-bootstrap.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922080000_device_authorized_rpcs.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-auth.sql

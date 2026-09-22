@@ -8,7 +8,7 @@ import { useAuth } from './useAuth';
 import { isAdminUser } from '../lib/access';
 import { VaultGate, vaultGateState } from '../components/VaultGate';
 import { RecoverySetup } from '../components/RecoverySetup';
-import { formatEnrollmentCode, getDeviceRequest, loadDeviceState, revokeOwnDevice, saveDeviceState } from '../lib/device';
+import { deleteDeviceState, formatEnrollmentCode, getDeviceRequest, loadDeviceState, revokeOwnDevice, saveDeviceState } from '../lib/device';
 import { activateRecoveredDevice, beginRecovery, completeRecovery, createRecoveryKey, decryptDeviceBundle, getPasskeyRestoreDevices, prepareDeviceEnrollment, registerPasskey, renewDeviceLease, renewThenCompleteDevice, unlockPasskey, webauthnChallenge } from '../lib/device-security';
 import { decryptPrivateBundle, deriveQuoteKey, deriveRecoveryBundleKey, encryptPrivateBundle, fingerprintPublicJwk, generateAuthorizationToken, generateWrappingKeyPair, unwrapVaultKey, wrapVaultKey } from '../lib/device-crypto';
 import { arrayBufferToBase64 } from '../lib/crypto';
@@ -75,11 +75,11 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
         return () => { if (timer !== undefined) window.clearTimeout(timer); document.removeEventListener('visibilitychange', foreground); window.removeEventListener('focus', foreground); };
     }, [encryptionKey, leaseExpiresAt, lockVault]);
     const handleLegacyUnlock = async (event: FormEvent<HTMLFormElement>) => {
-        event.preventDefault(); const vault = stateRef.current; const password = new FormData(event.currentTarget).get('vault-key'); if (!vault || !isLegacyVaultState(vault) || !user || busy || typeof password !== 'string' || !password) return;
+        event.preventDefault(); const form = event.currentTarget; const vault = stateRef.current; const password = new FormData(form).get('vault-key'); if (!vault || !isLegacyVaultState(vault) || !user || busy || typeof password !== 'string' || !password) return;
         const version = ++unlockRequest.current; setBusy(true); setError('');
         try { let key: CryptoKey; let generation = vault.generation;
             if (vault.verifier) key = await unlockWithVerifier(password, vault.kdf, vault.verifier); else { if (!canSync) throw new Error('Connect to initialize the vault.'); if (!isAdminUser(user)) throw new Error('The administrator must initialize the vault first.'); const config = await createVaultConfig(password); const { data, error: initError } = await supabase.rpc('initialize_vault', { p_expected_generation: vault.generation, p_kdf: config.kdf, p_verifier: config.verifier }); if (initError) throw new Error(initError.message); const initialized = parseLegacyVaultMutation(data); cacheVaultState(user.id, initialized); stateRef.current = initialized; setState(initialized); key = config.key; generation = initialized.generation; }
-            if (unlockRequest.current === version) { keyGeneration.current = generation; setEncryptionKey(key); event.currentTarget.reset(); }
+            if (unlockRequest.current === version) { keyGeneration.current = generation; setEncryptionKey(key); form.reset(); }
         } catch (cause) { if (unlockRequest.current === version) setError(cause instanceof Error ? cause.message : 'Could not unlock the vault.'); } finally { if (unlockRequest.current === version) setBusy(false); }
     };
     const enroll = useCallback(async (mode: 'remembered' | 'passkey-prf') => {
@@ -131,11 +131,13 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
         const candidate = (await getPasskeyRestoreDevices()).find(device => device.deviceId === deviceId); if (!candidate) throw new Error('That passkey device is no longer available.');
         const key = await unlockPasskey(candidate.protection, await webauthnChallenge('restoration'));
         const local: DeviceLocalState = { accountId: user.id, deviceId: candidate.deviceId, publicKeyFingerprint: candidate.publicKeyFingerprint, protectionMode: 'passkey-prf', protection: candidate.protection as unknown as Record<string, unknown>, encryptedPrivateBundle: candidate.encryptedPrivateBundle };
-        await saveDeviceState(local); const bundle = await decryptDeviceBundle(local, key);
-        const completed = await renewThenCompleteDevice({ accountId: user.id, deviceId: local.deviceId, token: bundle.authorizationToken, generation: candidate.generation, publicKeyFingerprint: local.publicKeyFingerprint }); const vault = stateRef.current;
-        if (!vault || isLegacyVaultState(vault) || completed.wrapper?.generation !== vault.generation) throw new Error('Restored device does not match the active vault.');
-        const opened = await unwrapVaultKey(completed.wrapper.wrappedKey, bundle.privateKey, { vaultId: 'quotevault', generation: vault.generation, targetFingerprint: completed.publicKeyFingerprint }); const quoteKey = await deriveQuoteKey(opened, vault.generation);
-        clearKeys(); masterKey.current = opened; keyGeneration.current = vault.generation; setDeviceState(completed); setLeaseExpired(false); setLeaseExpiresAt(completed.lease?.claims[5] ?? null); setPendingRequest(null); setEncryptionKey(quoteKey);
+        const bundle = await decryptDeviceBundle(local, key); await saveDeviceState(local);
+        try {
+            const completed = await renewThenCompleteDevice({ accountId: user.id, deviceId: local.deviceId, token: bundle.authorizationToken, generation: candidate.generation, publicKeyFingerprint: local.publicKeyFingerprint }); const vault = stateRef.current;
+            if (!vault || isLegacyVaultState(vault) || completed.wrapper?.generation !== vault.generation) throw new Error('Restored device does not match the active vault.');
+            const opened = await unwrapVaultKey(completed.wrapper.wrappedKey, bundle.privateKey, { vaultId: 'quotevault', generation: vault.generation, targetFingerprint: completed.publicKeyFingerprint }); const quoteKey = await deriveQuoteKey(opened, vault.generation);
+            clearKeys(); masterKey.current = opened; keyGeneration.current = vault.generation; setDeviceState(completed); setLeaseExpired(false); setLeaseExpiresAt(completed.lease?.claims[5] ?? null); setPendingRequest(null); setEncryptionKey(quoteKey);
+        } catch (cause) { await deleteDeviceState(user.id); throw cause; }
     }, [canSync, clearKeys, user]);
     if (!user) return children;
     if (encryptionKey && recoveryRequired) return <RecoverySetup onComplete={async phrase => { await setupRecovery(phrase); setRecoveryRequired(false); }} />;

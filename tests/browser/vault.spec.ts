@@ -6,6 +6,25 @@ async function unlock(page: Page) {
   await expect(page.getByRole('button', { name: 'Add quote', exact: true })).toBeVisible();
 }
 
+test('legacy unlock clears the submitted vault key', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('input[type=email]').fill('browser-test@example.com');
+  await page.locator('input[type=password]').fill('local-test-password');
+  await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+  const key = page.getByLabel('Group Vault Key');
+  await page.evaluate(() => {
+    const reset = HTMLFormElement.prototype.reset;
+    HTMLFormElement.prototype.reset = function () {
+      Reflect.set(window, '__legacyVaultFormReset', true);
+      return reset.call(this);
+    };
+  });
+  await key.fill('demo-vault-key');
+  await page.getByRole('button', { name: 'Unlock Vault', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => Reflect.get(window, '__legacyVaultFormReset'))).toBe(true);
+  await expect(page.getByRole('button', { name: 'Add quote', exact: true })).toBeVisible();
+});
+
 async function localRows(page: Page, table: string) {
   return page.evaluate(async name => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {

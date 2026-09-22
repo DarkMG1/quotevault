@@ -107,10 +107,11 @@ const initial = { accountId: accountA, deviceId, publicKeyFingerprint: digest, p
 
 {
   const passkeyState = { ...initial, protectionMode: 'passkey-prf', protection: { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: token, prfSalt: digest, kdf: 'HKDF-SHA-256' } };
-  const { device, deviceState, calls } = setup(() => ({ device_id: deviceId, generation, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z' }));
+  const { device, deviceState, calls } = setup(() => ({ device_id: deviceId, generation, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z', recovery_setup_required: false }));
   await device.saveDeviceState(passkeyState);
   const result = await device.completeDevice(accountA, deviceId, token);
   assert.equal('rememberedKey' in result, false);
+  assert.equal('recoverySetupRequired' in result, false);
   assert.equal('rememberedKey' in deviceState.rows.get(accountA), false);
   await assert.rejects(device.completeDevice(accountA, deviceId, token, rememberedKey), /transient key/i);
   assert.equal(calls.length, 1);
@@ -133,15 +134,26 @@ const initial = { accountId: accountA, deviceId, publicKeyFingerprint: digest, p
 {
   const { device } = setup(() => null);
   await device.saveDeviceState({ ...initial, recoverySetupRequired: true });
-  assert.equal((await device.loadDeviceState(accountA)).recoverySetupRequired, true, 'first-device recovery setup survives lock and reload');
+  assert.equal((await device.loadDeviceState(accountA)).recoverySetupRequired, true, 'server-required recovery setup survives lock and reload');
   await assert.rejects(device.saveDeviceState({ ...initial, recoverySetupRequired: 'yes' }), /local state/i);
 }
 
+{
+  const { device, deviceState } = setup(() => ({ device_id: deviceId, generation, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z', recovery_setup_required: true }));
+  await device.saveDeviceState(initial);
+  const completed = await device.completeDevice(accountA, deviceId, token, rememberedKey);
+  assert.equal(completed.recoverySetupRequired, true, 'only the completed server response may require recovery setup');
+  assert.equal(deviceState.rows.get(accountA).recoverySetupRequired, true);
+  const malformed = setup(() => ({ device_id: deviceId, generation, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z', recovery_setup_required: 'true' }));
+  await malformed.device.saveDeviceState(initial);
+  await assert.rejects(malformed.device.completeDevice(accountA, deviceId, token, rememberedKey), /Invalid device/);
+}
+
 for (const [label, reply] of [
-  ['wrong device', { device_id: accountB, generation, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z' }],
-  ['wrong generation', { device_id: deviceId, generation: accountB, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z' }],
-  ['bad wrapper', { device_id: deviceId, generation, wrapped_key: 'bad', lease_expires_at: '2030-01-01T00:00:00.000Z' }],
-  ['bad expiry', { device_id: deviceId, generation, wrapped_key: wrapper, lease_expires_at: 'invalid' }],
+  ['wrong device', { device_id: accountB, generation, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z', recovery_setup_required: false }],
+  ['wrong generation', { device_id: deviceId, generation: accountB, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z', recovery_setup_required: false }],
+  ['bad wrapper', { device_id: deviceId, generation, wrapped_key: 'bad', lease_expires_at: '2030-01-01T00:00:00.000Z', recovery_setup_required: false }],
+  ['bad expiry', { device_id: deviceId, generation, wrapped_key: wrapper, lease_expires_at: 'invalid', recovery_setup_required: false }],
 ]) {
   const { device, calls } = setup(() => reply);
   await device.saveDeviceState(initial);
@@ -150,7 +162,7 @@ for (const [label, reply] of [
 }
 
 {
-  const { device, deviceState, calls } = setup((name) => name === 'complete_device' ? { device_id: deviceId, generation, wrapped_key: 'A'.repeat(512), lease_expires_at: '2030-01-01T00:00:00.000Z' } : null);
+  const { device, deviceState, calls } = setup((name) => name === 'complete_device' ? { device_id: deviceId, generation, wrapped_key: 'A'.repeat(512), lease_expires_at: '2030-01-01T00:00:00.000Z', recovery_setup_required: false } : null);
   await device.saveDeviceState(initial);
   const state = await device.completeDevice(accountA, deviceId, token, rememberedKey);
   assert.equal(state.accountId, accountA);
@@ -163,7 +175,7 @@ for (const [label, reply] of [
 
 {
   const lease = { version: 1, claims: [1, deviceId, accountA, generation, 1, 2, digest], signature: 'AA==' };
-  const { device, deviceState } = setup(() => ({ device_id: deviceId, generation, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z' }));
+  const { device, deviceState } = setup(() => ({ device_id: deviceId, generation, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z', recovery_setup_required: false }));
   await device.saveDeviceState({ ...initial, lease, rememberedKey });
   const complete = await device.completeDevice(accountA, deviceId, token, rememberedKey);
   assert.equal(JSON.stringify(complete.lease), JSON.stringify(lease), 'completion keeps the signed lease verified before wrapper retrieval');
@@ -180,7 +192,7 @@ for (const [label, reply] of [
 }
 
 {
-  const { device, calls } = setup(() => ({ device_id: 'not-a-uuid', generation, wrapped_key: 'bad', lease_expires_at: '2030-01-01T00:00:00.000Z' }));
+  const { device, calls } = setup(() => ({ device_id: 'not-a-uuid', generation, wrapped_key: 'bad', lease_expires_at: '2030-01-01T00:00:00.000Z', recovery_setup_required: false }));
   await device.saveDeviceState(initial);
   await assert.rejects(device.completeDevice(accountA, deviceId, token, rememberedKey), /Invalid device/);
   assert.equal(calls.length, 1);

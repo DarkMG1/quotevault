@@ -65,10 +65,10 @@ test('approval completion renews and verifies its lease before fetching the wrap
   assert.deepEqual(calls.filter(([name]) => name === 'renew' || name === 'complete_device').map(([name]) => name), ['renew', 'complete_device']);
 });
 
-test('only a first enrollment persists the safe recovery-setup gate marker', async () => {
+test('device requests do not guess whether recovery setup is required', async () => {
   const first = setup();
   await first.api.prepareDeviceEnrollment({ accountId, label: 'Browser', requestKind: 'first', protectionMode: 'remembered', protection: { version: 1, mode: 'remembered' } });
-  assert.equal(first.states.get(accountId).recoverySetupRequired, true);
+  assert.equal('recoverySetupRequired' in first.states.get(accountId), false);
   const additional = setup();
   await additional.api.prepareDeviceEnrollment({ accountId, label: 'Browser', requestKind: 'additional', protectionMode: 'remembered', protection: { version: 1, mode: 'remembered' } });
   assert.equal('recoverySetupRequired' in additional.states.get(accountId), false);
