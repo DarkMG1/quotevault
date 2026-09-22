@@ -138,6 +138,9 @@ const initial = { accountId: accountA, deviceId, publicKeyFingerprint: digest, p
   assert.equal((await device.loadDeviceState(accountA)).recoverySetupRequired, true, 'server-required recovery setup survives lock and reload');
   assert.equal(vaultGate.vaultGateState({ recovery: device.needsRecoverySetup(await device.loadDeviceState(accountA)), device: true, key: true, leaseValid: true }), 'recovery-setup', 'a cleared-site passkey restore with server=true reaches recovery setup before quote UI');
   assert.equal(device.needsRecoverySetup(initial), false);
+  assert.equal(device.recoverySetupConflictMessage(false, initial), 'Recovery was configured on another device. This displayed phrase was not saved; reload to continue.');
+  assert.equal(device.recoverySetupConflictMessage(true, initial), null, 'recovery replacement must retain its own failure');
+  assert.equal(device.recoverySetupConflictMessage(false, { ...initial, recoverySetupRequired: true }), null, 'an unresolved first setup keeps its original failure');
   await assert.rejects(device.saveDeviceState({ ...initial, recoverySetupRequired: 'yes' }), /local state/i);
 }
 
