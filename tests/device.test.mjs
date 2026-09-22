@@ -157,7 +157,6 @@ for (const [label, reply] of [
   assert.equal(deviceState.rows.has(accountB), true);
   await device.deleteDeviceState(accountB, true);
   assert.equal(deviceState.rows.size, 0);
-  assert.equal(deviceState.rows.size, 0);
 }
 
 console.log('device tests passed');
