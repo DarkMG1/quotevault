@@ -16,10 +16,11 @@ begin
   end if;
   if p_mode <> 'passkey-prf' then return false; end if;
   for key_name in select jsonb_object_keys(p_protection) loop
-    if key_name not in ('version', 'rpId', 'credentialId', 'prfSalt') then return false; end if;
+    if key_name not in ('version', 'rpId', 'credentialId', 'prfSalt', 'kdf') then return false; end if;
   end loop;
   if p_protection->'version' <> '1'::jsonb or jsonb_typeof(p_protection->'rpId') <> 'string'
      or jsonb_typeof(p_protection->'credentialId') <> 'string' or jsonb_typeof(p_protection->'prfSalt') <> 'string'
+     or p_protection->'kdf' is distinct from '"HKDF-SHA-256"'::jsonb
      or p_protection->>'rpId' <> 'quotes.darkmg1.dev' then return false; end if;
   credential := public.qv_base64url_bytes(p_protection->>'credentialId');
   return credential is not null and octet_length(credential) between 1 and 1024

@@ -14,7 +14,7 @@ declare
   public_jwk jsonb := jsonb_build_object('kty', 'RSA', 'n', rtrim(replace(replace(replace(encode(decode('80' || repeat('00', 383), 'hex'), 'base64'), E'\n', ''), '+', '-'), '/', '_'), '='), 'e', 'AQAB');
   fingerprint text;
   bundle jsonb := jsonb_build_object('version', 2, 'iv', 'AAAAAAAAAAAAAAAA', 'data', 'AAAAAAAAAAAAAAAAAAAAAA==');
-  passkey_protection jsonb := jsonb_build_object('version', 1, 'rpId', 'quotes.darkmg1.dev', 'credentialId', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'prfSalt', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+  passkey_protection jsonb := jsonb_build_object('version', 1, 'rpId', 'quotes.darkmg1.dev', 'credentialId', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'prfSalt', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'kdf', 'HKDF-SHA-256');
   remembered_protection jsonb := jsonb_build_object('version', 1, 'mode', 'remembered');
   state jsonb;
   restored jsonb;
@@ -33,6 +33,8 @@ begin
      or public.qv_valid_device_protection('remembered', '{"version":1}'::jsonb) is not false
      or public.qv_valid_device_protection('remembered', '{"version":1,"mode":"remembered","extra":true}'::jsonb) is not false
      or public.qv_valid_device_protection('passkey-prf', passkey_protection) is not true
+     or public.qv_valid_device_protection('passkey-prf', passkey_protection - 'kdf') is not false
+     or public.qv_valid_device_protection('passkey-prf', jsonb_set(passkey_protection, '{kdf}', '"PBKDF2"')) is not false
      or public.qv_valid_device_protection('passkey-prf', jsonb_set(passkey_protection, '{credentialId}', 'true'::jsonb)) is not false
      or public.qv_valid_device_protection('passkey-prf', jsonb_set(passkey_protection, '{prfSalt}', '"bad"')) is not false
      or public.qv_valid_device_protection('passkey-prf', passkey_protection || '{"extra":true}'::jsonb) is not false then
