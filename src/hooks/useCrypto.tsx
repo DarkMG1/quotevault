@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { createVaultConfig, unlockWithVerifier } from '../lib/crypto';
-import { cacheVaultState, loadVaultState, parseVaultState, readCachedVaultState } from '../lib/vault';
+import { cacheVaultState, isLegacyVaultState, loadVaultState, parseVaultState, readCachedVaultState } from '../lib/vault';
 import type { VaultState } from '../lib/vault';
 import { supabase } from '../lib/supabase';
 import { Lock, Loader2 } from 'lucide-react';
@@ -85,7 +85,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
 
     const handleUnlock = async (event: FormEvent) => {
         event.preventDefault();
-        if (!state || !user || busy || !password) return;
+        if (!state || !isLegacyVaultState(state) || !user || busy || !password) return;
         const version = ++unlockRequest.current;
         setBusy(true);
         setError('');
@@ -103,6 +103,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
                 });
                 if (initError) throw new Error(initError.message);
                 const initialized = parseVaultState(data);
+                if (!isLegacyVaultState(initialized)) throw new Error('Device vault setup is required.');
                 if (unlockRequest.current !== version) return;
                 cacheVaultState(user.id, initialized);
                 currentState.current = initialized;
@@ -124,7 +125,8 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
 
     if (!user) return children;
     if (!encryptionKey) {
-        const initializing = state && !state.verifier;
+        const legacyState = isLegacyVaultState(state) ? state : null;
+        const initializing = legacyState && !legacyState.verifier;
         return <main className="min-h-[100dvh] flex items-center justify-center bg-background p-4">
             <section className="w-full max-w-sm bg-surface p-8 rounded-3xl border border-slate-700 text-center">
                 <Lock className="w-10 h-10 mx-auto text-primary-400 mb-6" aria-hidden="true" />
@@ -138,7 +140,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
                     <input id="vault-key" type="password" required autoComplete={initializing ? 'new-password' : 'off'}
                         minLength={initializing ? 12 : undefined} value={password} onChange={event => setPassword(event.target.value)}
                         className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white" />
-                    <button type="submit" disabled={busy || !state || !password}
+                    <button type="submit" disabled={busy || !legacyState || !password}
                         className="w-full bg-primary-600 disabled:opacity-50 py-3 rounded-xl flex justify-center">
                         {busy ? <><Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" /><span className="sr-only">Loading</span></>
                             : initializing ? 'Initialize Vault' : 'Unlock Vault'}
@@ -157,7 +159,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
         </main>;
     }
     return <CryptoContext.Provider value={{ encryptionKey, isLocked: false,
-        vaultGeneration: state?.generation ?? null, legacyVaultGeneration: state?.legacy_generation ?? null, lockVault }}>
+        vaultGeneration: state?.generation ?? null, legacyVaultGeneration: isLegacyVaultState(state) ? state.legacy_generation : null, lockVault }}>
         {children}
     </CryptoContext.Provider>;
 };

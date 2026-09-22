@@ -4,9 +4,12 @@ begin;
 do $$
 declare
   member_id uuid := 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  admin_id uuid := 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   other_id uuid := 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
   passkey_id uuid := '22222222-2222-4222-8222-222222222222';
   remembered_id uuid := '33333333-3333-4333-8333-333333333333';
+  malformed_active_id uuid := '44444444-4444-4444-8444-444444444444';
+  malformed_pending_id uuid := '55555555-5555-4555-8555-555555555555';
   token_digest text := 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
   public_jwk jsonb := jsonb_build_object('kty', 'RSA', 'n', rtrim(replace(replace(replace(encode(decode('80' || repeat('00', 383), 'hex'), 'base64'), E'\n', ''), '+', '-'), '/', '_'), '='), 'e', 'AQAB');
   fingerprint text;
@@ -18,10 +21,11 @@ declare
 begin
   fingerprint := public.qv_public_key_fingerprint(public_jwk);
   insert into public.allowlist(id, email, created_at)
-  values (member_id, 'member@example.invalid', now()), (other_id, 'other@example.invalid', now())
+  values (member_id, 'member@example.invalid', now()), (admin_id, 'darkmgdevelopment@gmail.com', now()), (other_id, 'other@example.invalid', now())
   on conflict (id) do nothing;
   insert into auth.users(instance_id, id, aud, role, email, encrypted_password, email_confirmed_at)
   values (gen_random_uuid(), member_id, 'authenticated', 'authenticated', 'member@example.invalid', 'x', now()),
+         (gen_random_uuid(), admin_id, 'authenticated', 'authenticated', 'darkmgdevelopment@gmail.com', 'x', now()),
          (gen_random_uuid(), other_id, 'authenticated', 'authenticated', 'other@example.invalid', 'x', now())
   on conflict (id) do nothing;
 
@@ -53,10 +57,12 @@ begin
     raise exception 'legacy bootstrap response changed';
   end if;
 
-  insert into public.vault_devices(id, owner_id, status, request_kind, enrollment_fingerprint, public_jwk, public_key_fingerprint, authorization_token_digest, label, protection_mode, protection, encrypted_private_bundle, lease_expires_at)
+  insert into public.vault_devices(id, owner_id, status, request_kind, expires_at, enrollment_fingerprint, public_jwk, public_key_fingerprint, authorization_token_digest, label, protection_mode, protection, encrypted_private_bundle, lease_expires_at)
   values
-    (passkey_id, member_id, 'active', 'first', token_digest, public_jwk, fingerprint, token_digest, 'passkey restore', 'passkey-prf', passkey_protection, bundle, now() + interval '1 day'),
-    (remembered_id, member_id, 'active', 'first', token_digest, public_jwk, fingerprint, token_digest, 'remembered restore', 'remembered', remembered_protection, bundle, now() + interval '1 day');
+    (passkey_id, member_id, 'active', 'first', null, token_digest, public_jwk, fingerprint, token_digest, 'passkey restore', 'passkey-prf', passkey_protection, bundle, now() + interval '1 day'),
+    (remembered_id, member_id, 'active', 'first', null, token_digest, public_jwk, fingerprint, token_digest, 'remembered restore', 'remembered', remembered_protection, bundle, now() + interval '1 day'),
+    (malformed_active_id, member_id, 'active', 'first', null, token_digest, public_jwk, fingerprint, token_digest, 'malformed passkey', 'passkey-prf', '{"version":1}'::jsonb, bundle, now() + interval '1 day'),
+    (malformed_pending_id, member_id, 'pending', 'first', now() + interval '1 day', token_digest, public_jwk, fingerprint, token_digest, 'malformed pending', 'remembered', '{"version":1}'::jsonb, bundle, null);
   restored := public.get_passkey_restore_devices();
   if restored->>'generation' is null or jsonb_array_length(restored->'devices') <> 1
      or restored->'devices'->0->>'device_id' <> passkey_id::text
@@ -69,6 +75,17 @@ begin
   perform set_config('request.jwt.claim.sub', other_id::text, true);
   if jsonb_array_length(public.get_passkey_restore_devices()->'devices') <> 0 then
     raise exception 'passkey restoration crossed account boundary';
+  end if;
+  perform set_config('request.jwt.claim.sub', admin_id::text, true);
+  begin
+    perform public.approve_device(malformed_pending_id, member_id, fingerprint, token_digest, repeat('A', 512),
+      (select generation from public.vault_state where singleton), null, null);
+    raise exception 'malformed pending device was approved';
+  exception when sqlstate '40001' then null;
+  end;
+  if (select status from public.vault_devices where id = malformed_pending_id) <> 'pending'
+     or exists (select 1 from public.vault_device_wrappers where device_id = malformed_pending_id) then
+    raise exception 'malformed pending device changed state';
   end if;
 
   update public.vault_state set envelope_status = 'active', prepared_generation = gen_random_uuid() where singleton;

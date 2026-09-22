@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadModule } from './load-module.mjs';
 
-const state = { generation: '11111111-1111-4111-8111-111111111111', legacy_generation: null,
+const state = { envelope_status: 'legacy', generation: '11111111-1111-4111-8111-111111111111', prepared_generation: null, legacy_generation: null,
   kdf: { salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600000 },
   verifier: { iv: 'AAAAAAAAAAAAAAAA', data: 'AAAAAAAAAAAAAAAAAAAAAA==' } };
 function setup() {
@@ -59,4 +59,22 @@ test('local-only settings never wait for an online session refresh', async () =>
   app.network.result = { data: null, error: { code: '42501', message: 'Must not be requested' } };
   assert.equal((await app.loadVaultState('alice', true)).generation, state.generation);
   assert.equal(app.calls(), 1);
+});
+
+test('server state requires an explicit envelope status and rejects legacy verifier material after cutover', () => {
+  const app = setup();
+  const { envelope_status, prepared_generation, ...preMigration } = state;
+  assert.throws(() => app.parseVaultState(preMigration), /Invalid/);
+  assert.throws(() => app.parseVaultState({ ...state, envelope_status: 'active' }), /Invalid/);
+  const active = app.parseVaultState({ envelope_status: 'active', generation: state.generation, prepared_generation: null });
+  assert.equal(active.envelope_status, 'active');
+});
+
+test('only cached pre-migration legacy settings are normalized for offline compatibility', () => {
+  const app = setup();
+  const { envelope_status, prepared_generation, ...preMigration } = state;
+  app.stored.set('quotevault:settings:alice', JSON.stringify(preMigration));
+  assert.equal(app.readCachedVaultState('alice')?.envelope_status, 'legacy');
+  app.stored.set('quotevault:settings:bob', JSON.stringify({ ...state, envelope_status: 'active' }));
+  assert.equal(app.readCachedVaultState('bob'), null);
 });

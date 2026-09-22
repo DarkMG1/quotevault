@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { clearCachedSession, isLocallySignedOut, localSignOutKey, readCachedSessionUser, setLocalSignedOut, supabase } from '../lib/supabase';
-import { clearCachedVaultState, readCachedVaultState } from '../lib/vault';
+import { clearCachedVaultState, isLegacyVaultState, readCachedVaultState } from '../lib/vault';
 import { isAuthRetryableFetchError, type User } from '@supabase/supabase-js';
 
 interface AuthContextValue {
@@ -74,7 +74,8 @@ function clearRecoveryIntent() {
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const [user, setUser] = useState<User | null>(() => {
         const cached = readCachedSessionUser();
-        return cached && readCachedVaultState(cached.id)?.verifier ? cached : null;
+        const vault = cached && readCachedVaultState(cached.id);
+        return cached && vault && (!isLegacyVaultState(vault) || vault.verifier) ? cached : null;
     });
     const localUser = useRef(user);
     const [loading, setLoading] = useState(!user || hasRecoveryIntent());

@@ -205,7 +205,7 @@ const authModule = load('src/hooks/useAuth.tsx', {
   react: authReact,
   'react/jsx-runtime': { jsx: (type, props) => type(props) },
   '@supabase/supabase-js': { isAuthRetryableFetchError: () => false },
-  '../lib/vault': { readCachedVaultState: () => null, clearCachedVaultState() {} },
+  '../lib/vault': { readCachedVaultState: () => null, isLegacyVaultState: state => state?.envelope_status === 'legacy' || state?.envelope_status === 'preparing', clearCachedVaultState() {} },
   '../lib/supabase': {
     readCachedSessionUser: () => null, clearCachedSession() {}, isLocallySignedOut: () => false, setLocalSignedOut() {}, localSignOutKey: 'test-signout',
     supabase: {
@@ -230,6 +230,33 @@ assert.equal(authContext.value.user, newerUser, 'a stale session result cannot o
 assert.equal(authContext.value.loading, false, 'a newer auth event clears session loading');
 authCleanup?.();
 
+// Envelope clients need the cached signed-in identity to enter their device gate offline.
+let envelopeContext;
+const envelopeReact = {
+  createContext: initial => {
+    envelopeContext = { value: initial };
+    envelopeContext.Provider = ({ value }) => { envelopeContext.value = value; return null; };
+    return envelopeContext;
+  },
+  useContext: context => context.value,
+  useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
+  useRef: initial => ({ current: initial }),
+  useCallback: callback => callback,
+  useEffect() {},
+};
+const envelopeAuth = load('src/hooks/useAuth.tsx', {
+  react: envelopeReact,
+  'react/jsx-runtime': { jsx: (type, props) => type(props) },
+  '@supabase/supabase-js': { isAuthRetryableFetchError: () => false },
+  '../lib/vault': { readCachedVaultState: () => ({ envelope_status: 'active' }), isLegacyVaultState: state => state?.envelope_status === 'legacy' || state?.envelope_status === 'preparing', clearCachedVaultState() {} },
+  '../lib/supabase': {
+    readCachedSessionUser: () => ({ id: 'active-device-user' }), clearCachedSession() {}, isLocallySignedOut: () => false, setLocalSignedOut() {}, localSignOutKey: 'test-signout',
+    supabase: { auth: { getSession: async () => ({ data: { session: null }, error: null }), onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }) } },
+  },
+}, { navigator: { onLine: false }, document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} }, window: { addEventListener() {}, removeEventListener() {}, clearTimeout() {} } });
+envelopeAuth.AuthProvider({ children: null });
+assert.equal(envelopeContext.value.user?.id, 'active-device-user', 'cached active envelope state reaches the offline device gate');
+
 // A failed refresh must recover without needing a second browser online event.
 let recoverEffect;
 let recoverCalls = 0;
@@ -247,7 +274,7 @@ const recoverModule = load('src/hooks/useAuth.tsx', {
   react: { ...authReact, useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}], useEffect: effect => { recoverEffect = effect; } },
   'react/jsx-runtime': { jsx: (type, props) => type(props) },
   '@supabase/supabase-js': { isAuthRetryableFetchError: error => error?.name === 'AuthRetryableFetchError' },
-  '../lib/vault': { readCachedVaultState: () => ({ verifier: {} }), clearCachedVaultState() {} },
+  '../lib/vault': { readCachedVaultState: () => ({ envelope_status: 'legacy', verifier: {} }), isLegacyVaultState: state => state?.envelope_status === 'legacy' || state?.envelope_status === 'preparing', clearCachedVaultState() {} },
   '../lib/supabase': {
     readCachedSessionUser: () => ({ id: 'cached-user' }), clearCachedSession() {}, isLocallySignedOut: () => false, setLocalSignedOut() {}, localSignOutKey: 'test-signout',
     supabase: { auth: {
