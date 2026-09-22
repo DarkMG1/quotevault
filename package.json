@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "node --test tests/*.test.mjs && python3 -m unittest discover -s scripts/import -p 'test_*.py'",
+    "test:edge": "deno check supabase/functions/vault-security/index.ts && deno test supabase/functions/vault-security/index.test.ts",
     "build:smoke": "VITE_SUPABASE_URL=http://127.0.0.1:54329 VITE_SUPABASE_ANON_KEY=local-test-key VITE_DEVICE_LEASE_PUBLIC_JWK='{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"QjM2-RC4L30GHX65OHkHWNTj-C35S3JbP2B8RyqDOo0\",\"y\":\"80p6ndkl3Kc9IsD5Bp6vcGgl79lWldtXgLGU8nvkS3U\"}' npm run build -- --outDir dist-smoke.local",
     "test:browser": "playwright test",
     "test:database": "bash scripts/test-database.sh",

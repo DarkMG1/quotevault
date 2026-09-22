@@ -50,7 +50,8 @@ begin
   end if;
   issued := public.begin_recovery(member_id);
   if issued is null or issued ? 'wrapped_key' or public.qv_base64url_bytes(issued->>'challenge', 32) is null
-     or issued->'encrypted_private_key' <> bundle or issued->'kdf' <> kdf then
+     or issued->'encrypted_private_key' is distinct from bundle or issued->'kdf' is distinct from kdf
+     or issued->>'recovery_key_id' is distinct from recovery_id::text or issued->>'public_key_fingerprint' is distinct from fingerprint then
     raise exception 'challenge did not contain exactly one opaque 256-bit proof';
   end if;
   if public.complete_recovery((issued->>'challenge_id')::uuid, repeat('B', 43)) is not null then

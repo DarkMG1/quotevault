@@ -1,4 +1,4 @@
-import { encryptedRecoveryResponse, signLease } from './index.ts';
+import { encryptedRecoveryResponse, recoveryPublicKeyFingerprint, signLease } from './index.ts';
 import { verifyDeviceLeaseWithPublicKey } from '../../../src/lib/lease.ts';
 import type { DeviceLease, DeviceLeaseClaims } from '../../../src/types/index.ts';
 
@@ -19,8 +19,17 @@ Deno.test('Edge signatures verify in the browser verifier and recovery ciphertex
   const challenge = crypto.getRandomValues(new Uint8Array(32));
   const encryptedPrivateKey = { version: 2, iv: btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(12)))), data: btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))) };
   const kdf = { version: 1, iterations: 600000, salt: btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))) };
-  const response = await encryptedRecoveryResponse({ challenge_id: 'challenge-a', challenge: btoa(String.fromCharCode(...challenge)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''), public_jwk: publicRecoveryJwk, encrypted_private_key: encryptedPrivateKey, kdf });
-  if (!response || 'challenge' in response || 'public_jwk' in response || response.encryptedPrivateKey !== encryptedPrivateKey || response.kdf !== kdf) throw new Error('recovery response exposed or changed service-only material');
+  const serviceResult = {
+    challenge_id: 'challenge-a', challenge: btoa(String.fromCharCode(...challenge)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+    recovery_key_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', public_key_fingerprint: await recoveryPublicKeyFingerprint(publicRecoveryJwk), public_jwk: publicRecoveryJwk,
+    encrypted_private_key: encryptedPrivateKey, kdf,
+  };
+  const response = await encryptedRecoveryResponse(serviceResult);
+  if (!response || 'challenge' in response || 'public_jwk' in response || response.encryptedPrivateKey !== encryptedPrivateKey || response.kdf !== kdf
+    || response.recoveryKeyId !== serviceResult.recovery_key_id || response.publicKeyFingerprint !== serviceResult.public_key_fingerprint) throw new Error('recovery response exposed or changed service-only material');
+  const substituted = `${serviceResult.public_key_fingerprint.slice(0, -1)}${serviceResult.public_key_fingerprint.endsWith('A') ? 'E' : 'A'}`;
+  if (await encryptedRecoveryResponse({ ...serviceResult, public_key_fingerprint: substituted }) !== null
+    || await encryptedRecoveryResponse(({ ...serviceResult, recovery_key_id: undefined })) !== null) throw new Error('recovery response accepted missing or substituted AAD metadata');
   const ciphertext = Uint8Array.from(atob((response.ciphertext as string).replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0));
   const plaintext = new Uint8Array(await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, recoveryPair.privateKey, ciphertext as unknown as BufferSource));
   if (plaintext.byteLength !== 32 || !plaintext.every((byte, index) => byte === challenge[index])) throw new Error('recovery ciphertext did not decrypt to the challenge');

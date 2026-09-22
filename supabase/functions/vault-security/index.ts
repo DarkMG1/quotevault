@@ -23,6 +23,7 @@ const base64Bytes = (value: unknown): Uint8Array | null => {
 
 const base64url = (bytes: Uint8Array): string => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const source = (bytes: Uint8Array): BufferSource => bytes as unknown as BufferSource;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const canonicalLeasePayload = (claims: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(claims));
 const reply = (status: number, body: Record<string, unknown>) => new Response(JSON.stringify(body), {
   status, headers: { 'content-type': 'application/json', 'access-control-allow-origin': 'https://quotes.darkmg1.dev', 'vary': 'Origin' },
@@ -70,17 +71,30 @@ export const encryptRecoveryChallenge = async (publicJwk: JsonWebKey, challenge:
   return new Uint8Array(await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, key, source(challenge)));
 };
 
+export const recoveryPublicKeyFingerprint = async (publicJwk: JsonWebKey): Promise<string> => {
+  const payload = new TextEncoder().encode(JSON.stringify([1, 'RSA-OAEP', 'SHA-256', publicJwk.n, publicJwk.e]));
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', source(payload)));
+  try {
+    return base64url(digest);
+  } finally {
+    digest.fill(0);
+  }
+};
+
 export const encryptedRecoveryResponse = async (value: unknown): Promise<Record<string, unknown> | null> => {
   if (!value || typeof value !== 'object') return null;
   const data = value as Record<string, unknown>;
-  if (typeof data.challenge_id !== 'string' || !validRecoveryPublicJwk(data.public_jwk)
+  if (typeof data.challenge_id !== 'string' || typeof data.recovery_key_id !== 'string' || !UUID.test(data.recovery_key_id)
+    || typeof data.public_key_fingerprint !== 'string' || base64urlBytes(data.public_key_fingerprint)?.byteLength !== 32 || !validRecoveryPublicJwk(data.public_jwk)
     || !validEncryptedPrivateKey(data.encrypted_private_key) || !validKdf(data.kdf)) return null;
+  if (await recoveryPublicKeyFingerprint(data.public_jwk) !== data.public_key_fingerprint) return null;
   const challenge = base64urlBytes(data.challenge);
   if (!challenge || challenge.byteLength !== 32) return null;
   try {
     const ciphertext = await encryptRecoveryChallenge(data.public_jwk, challenge);
     try {
-      return { challengeId: data.challenge_id, ciphertext: base64url(ciphertext), encryptedPrivateKey: data.encrypted_private_key, kdf: data.kdf };
+      return { challengeId: data.challenge_id, recoveryKeyId: data.recovery_key_id, publicKeyFingerprint: data.public_key_fingerprint,
+        ciphertext: base64url(ciphertext), encryptedPrivateKey: data.encrypted_private_key, kdf: data.kdf };
     } finally {
       ciphertext.fill(0);
     }
