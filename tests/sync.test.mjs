@@ -76,12 +76,16 @@ function runProvider(db, { userId = 'u1', generation = 'g1', legacyGeneration = 
   const { QuotesProvider } = load('src/hooks/useQuotes.tsx', {
     react: React, 'react/jsx-runtime': { jsx: (type, props) => ({ type, props }) },
     'dexie-react-hooks': { useLiveQuery: (_query, _deps, fallback) => fallback },
-    '../lib/db': { db }, '../lib/sync': { cancelSyncRequests() {}, createSyncOperation() {}, enqueueDeleteMutation() {}, isTransientSyncFailure(error) { return error?.status === 503 || /failed to fetch/i.test(error?.message || ''); }, processSyncQueue },
-    '../lib/quote-crypto': { encryptQuoteRecord: async (privateFields, visibleFields) => ({ ...visibleFields, text: '$$E2E$$ciphertext' }) },
+    '../lib/db': { db }, '../lib/sync': { cancelSyncRequests() {}, createSyncOperation(action, quote, actorId, vaultGeneration) {
+      return { id: 'manual-operation', operation_id: 'manual-operation', action, quote_id: quote.id, actor_id: actorId,
+        vault_generation: vaultGeneration, payload: action === 'INSERT' ? { ...quote } : undefined,
+        created_at: '2026-09-22T00:00:00.000Z', status: 'pending' };
+    }, enqueueDeleteMutation() {}, isTransientSyncFailure(error) { return error?.status === 503 || /failed to fetch/i.test(error?.message || ''); }, processSyncQueue },
+    '../lib/quote-crypto': { encryptQuoteRecord: async (privateFields, visibleFields) => ({ ...visibleFields, text: '$$E2E$${"version":2,"iv":"iv","data":"ciphertext"}' }) },
     '../components/ui': { isCiphertextWithinLimit: () => true },
     '../lib/supabase': { supabase: { channel: () => ({ on() { return this; }, subscribe() { return { unsubscribe: async () => {} }; } }) } },
     './useAuth': { useAuth: () => ({ user: { id: userId }, canSync, retry }) },
-    './useCrypto': { useCrypto: () => ({ vaultGeneration: generation, legacyVaultGeneration: legacyGeneration, lockVault() {} }) },
+    './useCrypto': { useCrypto: () => ({ encryptionKey: {}, vaultGeneration: generation, legacyVaultGeneration: legacyGeneration, lockVault() {} }) },
   }, { navigator, window: { clearTimeout(id) { if (typeof id === 'number') timers[id] = undefined; }, setTimeout(callback, delay) { timers.push({ callback, delay }); return timers.length - 1; }, addEventListener() {}, removeEventListener() {} }, document: { addEventListener() {}, removeEventListener() {}, visibilityState }, crypto: webcrypto });
   const render = () => {
     cursor = 0;
@@ -89,6 +93,24 @@ function runProvider(db, { userId = 'u1', generation = 'g1', legacyGeneration = 
   };
   return { states, rendered: render(), render, cleanup: () => cleanups.splice(0).reverse().forEach(cleanup => cleanup()) };
 }
+
+await (async () => {
+  const db = { quotes: table(), syncQueue: table(), metadata: table(), transaction: async (_mode, ...args) => args.at(-1)() };
+  const provider = runProvider(db);
+  await settle();
+  const value = provider.render().props.value;
+  await value.addQuote({ text: 'manual plaintext', author: 'Ada', context: 'private context' }, '2026-09-22');
+  const stored = [...db.quotes.rows.values()][0];
+  const queued = [...db.syncQueue.rows.values()][0];
+  assert.equal(stored.author, 'ENCRYPTED', 'Dexie stores an opaque author placeholder');
+  assert.equal(stored.context, 'ENCRYPTED', 'Dexie stores an opaque context placeholder');
+  assert.equal(queued.payload.author, 'ENCRYPTED', 'queued INSERT stores an opaque author placeholder');
+  assert.equal(queued.payload.context, 'ENCRYPTED', 'queued INSERT stores an opaque context placeholder');
+  assert.equal(queued.action, 'INSERT', 'manual additions enqueue an INSERT operation');
+  assert.equal(queued.payload.text.startsWith('$$E2E$$'), true, 'queued INSERT carries ciphertext');
+  assert.equal(JSON.stringify(stored).includes('manual plaintext'), false, 'Dexie never stores quote plaintext');
+  assert.equal(JSON.stringify(queued).includes('manual plaintext'), false, 'queued INSERT never stores quote plaintext');
+})();
 
 await (async () => {
   const { db, sync, rpcCalls, rpcSignals } = setup();

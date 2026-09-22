@@ -38,9 +38,18 @@ test('rejects every authenticated metadata mismatch', async () => {
   const key = await cryptoApi.deriveEncryptionKey('test-passphrase');
   const stored = await quoteCrypto.encryptQuoteRecord(privateFields, visible, key);
   for (const field of ['id', 'vault_generation', 'user_id', 'created_at', 'quote_date']) {
-    const changed = { ...stored, [field]: field === 'quote_date' ? '2030-01-01' : `different-${field}` };
+    const changed = { ...stored, [field]: field === 'quote_date' || field === 'created_at' ? '2030-01-01' : `different-${field}` };
     await assert.rejects(quoteCrypto.decryptQuoteRecord(changed, key), /authenticated metadata/);
   }
+});
+
+test('canonicalizes equivalent timestamp spellings and rejects invalid timestamps', async () => {
+  const key = await cryptoApi.deriveEncryptionKey('test-passphrase');
+  const stored = await quoteCrypto.encryptQuoteRecord(privateFields, visible, key);
+  const equivalent = { ...stored, created_at: '2026-09-22T15:00:00+00:00' };
+  const decrypted = await quoteCrypto.decryptQuoteRecord(equivalent, key);
+  assert.equal(decrypted.created_at, equivalent.created_at, 'server-visible timestamp is retained');
+  await assert.rejects(quoteCrypto.decryptQuoteRecord({ ...stored, created_at: 'not-a-timestamp' }, key), /Invalid quote metadata/);
 });
 
 test('reads legacy sentinel ciphertext during migration', async () => {

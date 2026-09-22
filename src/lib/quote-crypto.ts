@@ -9,11 +9,14 @@ type QuoteFields = Record<string, unknown>;
 
 const metadataOf = (quote: object): QuoteMetadata => {
     const fields = quote as QuoteFields;
+    if (typeof fields.created_at !== 'string' || !Number.isFinite(new Date(fields.created_at).getTime())) {
+        throw new Error('Invalid quote metadata.');
+    }
     return {
         id: fields.id as string,
         vault_generation: fields.vault_generation as string,
         user_id: fields.user_id as string,
-        created_at: fields.created_at as string,
+        created_at: new Date(fields.created_at).toISOString(),
         quote_date: fields.quote_date === undefined ? null : fields.quote_date as string | null,
     };
 };
@@ -29,7 +32,7 @@ const hasMetadata = (value: object): boolean => {
     (fields.quote_date === null || typeof fields.quote_date === 'string');
 };
 
-const sameMetadata = (left: QuoteMetadata, right: QuoteFields): boolean =>
+const sameMetadata = (left: QuoteMetadata, right: QuoteMetadata): boolean =>
     left.id === right.id && left.vault_generation === right.vault_generation &&
     left.user_id === right.user_id && left.created_at === right.created_at &&
     left.quote_date === (right.quote_date ?? null);
@@ -48,23 +51,32 @@ export async function decryptQuoteRecord(storedQuote: object, key: CryptoKey): P
         throw new Error('Quote is not encrypted.');
     }
     const bundle: unknown = JSON.parse(stored.text.slice(QUOTE_CIPHERTEXT_SENTINEL.length));
-    const metadata = metadataOf(storedQuote);
-    const validVisibleMetadata = hasMetadata(metadata);
+    const isV2 = bundle && typeof bundle === 'object' && (bundle as { version?: unknown }).version === 2;
+    const hasCompleteVisibleMetadata = ['id', 'vault_generation', 'user_id', 'created_at'].every(field => field in stored);
+    const metadata = hasCompleteVisibleMetadata ? metadataOf(storedQuote) : undefined;
+    const validVisibleMetadata = metadata !== undefined && hasMetadata(metadata);
 
     let payload: unknown;
-    if (bundle && typeof bundle === 'object' && (bundle as { version?: unknown }).version === 2) {
-        if (!validVisibleMetadata) throw new Error('Invalid quote metadata.');
+    if (isV2) {
+        if (!metadata || !validVisibleMetadata) throw new Error('Invalid quote metadata.');
         try {
             payload = JSON.parse(await decryptEnvelope(bundle as Parameters<typeof decryptEnvelope>[0], key, aadOf(metadata)));
         } catch {
             throw new Error('Quote authenticated metadata mismatch.');
         }
-        if (!payload || typeof payload !== 'object' || !hasMetadata(payload as QuoteFields) || !sameMetadata(metadata, payload as QuoteFields)) {
+        let payloadMetadata: QuoteMetadata;
+        try { payloadMetadata = metadataOf(payload as object); } catch { throw new Error('Quote authenticated metadata mismatch.'); }
+        if (!payload || typeof payload !== 'object' || !hasMetadata(payload as QuoteFields) || !sameMetadata(metadata, payloadMetadata)) {
             throw new Error('Quote authenticated metadata mismatch.');
         }
     } else {
         payload = JSON.parse(await decryptData(bundle as Parameters<typeof decryptData>[0], key));
     }
     if (!payload || typeof payload !== 'object') throw new Error('Invalid encrypted quote payload.');
-    return { ...(payload as QuoteFields), ...(validVisibleMetadata ? metadata : {}) };
+    const visible = validVisibleMetadata ? {
+        id: (stored as QuoteFields).id, vault_generation: (stored as QuoteFields).vault_generation,
+        user_id: (stored as QuoteFields).user_id, created_at: (stored as QuoteFields).created_at,
+        quote_date: (stored as QuoteFields).quote_date ?? null,
+    } : {};
+    return { ...(payload as QuoteFields), ...visible };
 }

@@ -207,7 +207,7 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
         if (!isCiphertextWithinLimit(JSON.parse(String(encrypted.text).slice(7)))) {
             throw new Error('This quote is too large to save. Shorten the quote or context and try again.');
         }
-        const quote = { ...encrypted, sync_status: 'pending' } as unknown as Quote;
+        const quote = { ...encrypted, author: 'ENCRYPTED', context: 'ENCRYPTED', sync_status: 'pending' } as unknown as Quote;
         const operation = createSyncOperation('INSERT', quote, context.actorId, context.generation);
         await db.transaction('rw', db.quotes, db.syncQueue, async () => {
             await db.quotes.put(quote);
