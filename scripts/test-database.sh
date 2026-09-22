@@ -22,6 +22,8 @@ psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260921000000_v
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260921010000_browser_timestamps.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922000000_checked_import.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-import.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922010000_admin_quote_edit.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-edit.sql
 createdb "$migration_db"
 psql -X -v ON_ERROR_STOP=1 -d "$migration_db" -f tests/database-migration.sql
 createdb "$hardening_db"

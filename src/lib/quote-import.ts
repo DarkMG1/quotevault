@@ -139,6 +139,7 @@ export async function readPendingImport(context: SyncContext, key: CryptoKey): P
 
 export async function prepareImport(rows: ImportRow[], snapshot: ImportSnapshot, context: SyncContext, key: CryptoKey, active: () => boolean): Promise<PendingImport> {
     if (!active()) throw new Error('Vault access changed; unlock and review again.');
+    if (rows.some(row => !row.text.trim() || !row.author.trim())) throw new Error('Every selected quote needs text and a person quoted.');
     if (!rows.length || rows.length > 500 || checkImports(rows, snapshot.quotes).some(check => check.duplicate)) throw new Error('Remove duplicate entries before importing.');
     const operations: ImportOperation[] = await Promise.all(rows.map(async row => {
         const bundle = await encryptData(JSON.stringify({ text: row.text, author: row.author, context: row.context,

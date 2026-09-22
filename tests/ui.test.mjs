@@ -86,6 +86,8 @@ const components = load('src/components/AddQuote.tsx', {
   '../hooks/useCrypto': { useCrypto: () => ({ encryptionKey: {}, isLocked: false }) },
   '../lib/crypto': { encryptData: async () => ({}) },
   '../lib/profile-cache': { loadProfiles: async () => [] },
+  '../lib/quote-edit': { saveQuoteEdit: async () => {} },
+  '../lib/access': { isAdminUser: () => false },
   './ui': ui,
 });
 const addQuoteTree = components.AddQuote({ onClose: () => {} });
@@ -118,6 +120,8 @@ const submitComponents = load('src/components/AddQuote.tsx', {
   '../hooks/useCrypto': { useCrypto: () => ({ encryptionKey: {}, isLocked: false }) },
   '../lib/crypto': { encryptData: async plaintext => { encryptedInputs.push(plaintext); return { iv: 'iv', data: 'data' }; } },
   '../lib/profile-cache': { loadProfiles: async () => [] },
+  '../lib/quote-edit': { saveQuoteEdit: async () => {} },
+  '../lib/access': { isAdminUser: () => false },
   './ui': ui,
 });
 const submitTree = submitComponents.AddQuote({ onClose: () => {} });

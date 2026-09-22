@@ -5,6 +5,8 @@ import { useQuotes } from '../hooks/useQuotes';
 import { checkImports, loadImportSnapshot, parseImportFile, prepareImport, readPendingImport, sendPendingImport } from '../lib/quote-import';
 import type { ImportRow, ImportSnapshot, PendingImport } from '../lib/quote-import';
 import { getErrorMessage, useModalDialog } from './ui';
+import { loadProfiles } from '../lib/profile-cache';
+import { authorName, matchAuthor, matchedAuthorContext } from '../lib/quote-authors';
 
 export function ImportQuotes({ onClose }: { onClose: () => void }) {
     const { user, canSync } = useAuth();
@@ -16,6 +18,8 @@ export function ImportQuotes({ onClose }: { onClose: () => void }) {
     const [busy, setBusy] = useState(true);
     const [error, setError] = useState('');
     const [message, setMessage] = useState('');
+    const originalAuthors = useRef<string[]>([]);
+    const [authorNames, setAuthorNames] = useState<string[]>([]);
     const dialog = useRef<HTMLDialogElement>(null);
     const close = useRef<HTMLButtonElement>(null);
     const lifecycle = useRef(0);
@@ -48,9 +52,16 @@ export function ImportQuotes({ onClose }: { onClose: () => void }) {
         try {
             if (!canSync) throw new Error('Reconnect your session before checking duplicates.');
             if (file.size > 5 * 1024 * 1024) throw new Error('Choose a review file smaller than 5 MiB.');
-            const parsed = parseImportFile(await file.text());
-            const fresh = await loadImportSnapshot(context, encryptionKey);
+            const fileRows = parseImportFile(await file.text());
+            const [fresh, profiles] = await Promise.all([loadImportSnapshot(context, encryptionKey), loadProfiles(context.actorId)]);
             if (!current()) return;
+            setAuthorNames(profiles.map(authorName));
+            originalAuthors.current = fileRows.map(row => row.author);
+            const parsed = fileRows.map(row => {
+                const author = matchAuthor(row.author, profiles);
+                return { ...row, author, context: matchedAuthorContext(row.author, author, row.context) };
+            });
+            fresh.quotes = fresh.quotes.map(row => ({ ...row, author: matchAuthor(row.author, profiles) }));
             const matches = checkImports(parsed, fresh.quotes);
             setRows(parsed.map((row, index) => ({ ...row, selected: row.selected && !matches[index].duplicate && !matches[index].similar })));
             setSnapshot(fresh);
@@ -68,8 +79,9 @@ export function ImportQuotes({ onClose }: { onClose: () => void }) {
             let batch = resume ? pending : null;
             if (!batch) {
                 if (!snapshot || !selected.length) throw new Error('Select the quotes to import.');
-                const latest = await loadImportSnapshot(context, encryptionKey);
+                const [latest, profiles] = await Promise.all([loadImportSnapshot(context, encryptionKey), loadProfiles(context.actorId)]);
                 if (!current()) return;
+                latest.quotes = latest.quotes.map(row => ({ ...row, author: matchAuthor(row.author, profiles) }));
                 if (latest.revision !== snapshot.revision) {
                     const matches = checkImports(rows, latest.quotes);
                     setRows(rows.map((row, index) => ({ ...row, selected: row.selected && !matches[index].duplicate && !matches[index].similar })));
@@ -103,10 +115,11 @@ export function ImportQuotes({ onClose }: { onClose: () => void }) {
         {pending ? <div className="my-4 rounded border border-amber-700 p-4"><p>A saved import of {pending.operations.length} quotes needs confirmation. Checking it is safe to repeat.</p><button disabled={busy || !canSync} onClick={() => void importSelected(true)} className="mt-3 rounded bg-primary-600 px-4 py-2 disabled:opacity-50">Check saved import</button></div> : <label className="my-4 block">Reviewed quotes or full draft<input type="file" accept=".json,application/json" disabled={busy || !canSync} className="mt-2 block w-full" onChange={event => { const file = event.target.files?.[0]; if (file) void checkFile(file); event.target.value = ''; }} /></label>}
         {busy && <p role="status">Checking the vault…</p>}
         {!!rows.length && !pending && <>
+            <datalist id="import-author-names">{authorNames.map(name => <option key={name} value={name} />)}</datalist>
             <div className="sticky top-0 z-10 my-4 flex flex-wrap items-center gap-3 border-y border-slate-700 bg-surface py-3"><p role="status">{selected.length} selected · {duplicateCount} duplicates skipped</p><button disabled={busy} className="rounded border border-slate-600 px-3 py-2" onClick={() => setRows(rows.map((row, index) => ({ ...row, selected: !checks[index].duplicate && !checks[index].similar })))}>Select new quotes</button><button disabled={busy || !selected.length || !canSync} onClick={() => void importSelected()} className="rounded bg-primary-600 px-4 py-2 disabled:opacity-50">Import {selected.length} selected quotes</button></div>
             {rows.map((row, index) => <article key={index} className={`my-3 rounded-xl border border-slate-700 p-4 ${checks[index].duplicate ? 'opacity-60' : ''}`}>
                 <label className="flex items-center gap-2"><input type="checkbox" checked={row.selected && !checks[index].duplicate} disabled={busy || checks[index].duplicate} onChange={event => setRows(rows.map((item, at) => at === index ? { ...item, selected: event.target.checked } : item))} />Quote {index + 1}{checks[index].duplicate && ' — already present'}</label>
-                <blockquote className="my-3 whitespace-pre-wrap">{row.text}</blockquote><p>— {row.author}</p><p className="mt-2 text-sm text-slate-400">Originally shared by {row.source_sender}{row.quote_date && ` · ${row.quote_date}`}</p>{row.context && <p className="mt-2 whitespace-pre-wrap text-sm text-slate-300">Context: {row.context}</p>}
+                <blockquote className="my-3 whitespace-pre-wrap">{row.text}</blockquote><label className="block text-sm">Person quoted<input aria-label={`Person quoted for quote ${index + 1}`} list="import-author-names" value={row.author} disabled={busy || checks[index].duplicate} onChange={event => setRows(rows.map((item, at) => at === index ? { ...item, author: event.target.value, context: matchedAuthorContext(originalAuthors.current[index], event.target.value, item.context) } : item))} className="mt-1 block w-full rounded border border-slate-600 bg-slate-800 p-2 text-white" /></label><p className="mt-2 text-sm text-slate-400">Originally shared by {row.source_sender}{row.quote_date && ` · ${row.quote_date}`}</p>{row.context && <p className="mt-2 whitespace-pre-wrap text-sm text-slate-300">Context: {row.context}</p>}
                 {checks[index].similar && <p className="mt-3 whitespace-pre-wrap rounded bg-amber-950/50 p-3 text-sm text-amber-200">Possible duplicate — select only if this is a separate quote:<br />{checks[index].similar}</p>}
             </article>)}
         </>}

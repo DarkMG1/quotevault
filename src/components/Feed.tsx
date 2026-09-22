@@ -1,6 +1,8 @@
 import { ImportQuotes } from './ImportQuotes';
+import { AddQuote } from './AddQuote';
+import { MatchAuthors } from './MatchAuthors';
 import { useEffect, useRef, useState } from 'react';
-import { Search, CloudOff, Cloud, RefreshCw, Trash2, X } from 'lucide-react';
+import { Search, CloudOff, Cloud, RefreshCw, Trash2, Pencil, X } from 'lucide-react';
 import { useQuotes } from '../hooks/useQuotes';
 import { useAuth } from '../hooks/useAuth';
 import { useCrypto } from '../hooks/useCrypto';
@@ -14,9 +16,11 @@ export const Feed = () => {
     const { user } = useAuth();
     const { encryptionKey } = useCrypto();
     const [importOpen, setImportOpen] = useState(false);
+    const [matchingAuthors, setMatchingAuthors] = useState(false);
     const [search, setSearch] = useState('');
     const [decryptedQuotes, setDecryptedQuotes] = useState<Quote[] | null>(null);
     const [quoteToDelete, setQuoteToDelete] = useState<Quote | null>(null);
+    const [quoteToEdit, setQuoteToEdit] = useState<{ stored: Quote; display: Quote } | null>(null);
     const [deleteError, setDeleteError] = useState('');
     const [isDeleting, setIsDeleting] = useState(false);
     const [syncRetryError, setSyncRetryError] = useState('');
@@ -75,7 +79,10 @@ export const Feed = () => {
     return (
         <div className="px-4 py-6 space-y-6">
             {importOpen && <ImportQuotes onClose={() => setImportOpen(false)} />}
+            {matchingAuthors && isAdmin && <MatchAuthors onClose={() => setMatchingAuthors(false)} />}
+            {quoteToEdit && isAdmin && <AddQuote edit={quoteToEdit} onClose={() => setQuoteToEdit(null)} />}
             <button className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:text-white" onClick={() => setImportOpen(true)}>Import quotes</button>
+            {isAdmin && <button className="ml-3 rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:text-white" onClick={() => setMatchingAuthors(true)}>Match imported authors</button>}
             <div className="flex items-center space-x-3">
                 <div className="relative flex-1">
                     <Search aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
@@ -116,8 +123,6 @@ export const Feed = () => {
                                         setQuoteToDelete(quote);
                                     }
                                 }}
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
                                 exit={{ opacity: 0, scale: 0.95 }}
                                 className="bg-slate-800/40 backdrop-blur-sm border border-slate-700/50 p-5 rounded-2xl relative z-10 group bg-surface touch-pan-y"
                             >
@@ -131,6 +136,12 @@ export const Feed = () => {
                                 </div>
                                 {quote.context && <div className="mt-3 pt-3 border-t border-slate-700/30 text-sm text-slate-400 italic select-text">Context: {quote.context}</div>}
                                 {quote.source_sender && <div className="mt-3 text-sm text-slate-400 select-text">Originally shared by {quote.source_sender}</div>}
+                                {isAdmin && <button type="button" disabled={quote.sync_status === 'pending' || quote.sync_status === 'rejected'} onClick={() => {
+                                    const stored = quotes?.find(item => item.id === quote.id);
+                                    if (stored) setQuoteToEdit({ stored, display: quote });
+                                }} aria-label={`Edit quote by ${quote.author}`} className="mt-4 mr-3 inline-flex items-center gap-2 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-700/50 disabled:opacity-50">
+                                    <Pencil aria-hidden="true" className="h-4 w-4" /> Edit
+                                </button>}
                                 {canDelete && <button type="button" onClick={() => { setDeleteError(''); setQuoteToDelete(quote); }} aria-label={`Delete quote by ${quote.author}`} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-red-500/20 px-3 py-2 text-sm font-medium text-red-400 hover:bg-red-500/10">
                                     <Trash2 aria-hidden="true" className="h-4 w-4" /> Delete
                                 </button>}
