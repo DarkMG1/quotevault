@@ -17,20 +17,27 @@ const signFixture = async (overrides = {}) => {
   return { version: 1, claims, signature: Buffer.from(signature).toString('base64') };
 };
 
+const expected = () => ({
+  now: NOW,
+  deviceId: 'device-a',
+  accountId: 'account-a',
+  generation: 'generation-a',
+  publicKeyFingerprint: 'fingerprint-a',
+});
+
 test('lease verification rejects another device and the thirty-day boundary', async () => {
   const lease = await signFixture();
-  assert.equal(await leaseApi.verifyDeviceLease(lease, publicJwk, { now: NOW + 30 * DAY - 1, deviceId: 'device-a' }), true);
-  assert.equal(await leaseApi.verifyDeviceLease(lease, publicJwk, { now: NOW, deviceId: 'device-a', publicKeyFingerprint: 'fingerprint-a' }), true);
-  assert.equal(await leaseApi.verifyDeviceLease(lease, publicJwk, { now: NOW + 30 * DAY, deviceId: 'device-a' }), false);
-  assert.equal(await leaseApi.verifyDeviceLease(lease, publicJwk, { now: NOW, deviceId: 'device-b' }), false);
+  assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(lease, publicJwk, { ...expected(), now: NOW + 30 * DAY - 1 }), true);
+  assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(lease, publicJwk, { ...expected(), now: NOW + 30 * DAY }), false);
+  assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(lease, publicJwk, { ...expected(), deviceId: 'device-b' }), false);
 });
 
 test('lease verification rejects invalid signatures and bound claims', async () => {
   const lease = await signFixture();
-  assert.equal(await leaseApi.verifyDeviceLease({ ...lease, signature: `${lease.signature.slice(0, -1)}A` }, publicJwk, { now: NOW, deviceId: 'device-a' }), false);
-  assert.equal(await leaseApi.verifyDeviceLease(lease, publicJwk, { now: NOW, deviceId: 'device-a', accountId: 'account-b' }), false);
-  assert.equal(await leaseApi.verifyDeviceLease(lease, publicJwk, { now: NOW, deviceId: 'device-a', generation: 'generation-b' }), false);
-  assert.equal(await leaseApi.verifyDeviceLease(lease, publicJwk, { now: NOW, deviceId: 'device-a', publicKeyFingerprint: 'fingerprint-b' }), false);
-  assert.equal(await leaseApi.verifyDeviceLease(await signFixture({ 4: NOW + 1 }), publicJwk, { now: NOW, deviceId: 'device-a' }), false);
-  assert.equal(await leaseApi.verifyDeviceLease(await signFixture({ 5: NOW + 29 * DAY }), publicJwk, { now: NOW, deviceId: 'device-a' }), false);
+  assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey({ ...lease, signature: `${lease.signature.slice(0, -1)}A` }, publicJwk, expected()), false);
+  assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(lease, publicJwk, { ...expected(), accountId: 'account-b' }), false);
+  assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(lease, publicJwk, { ...expected(), generation: 'generation-b' }), false);
+  assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(lease, publicJwk, { ...expected(), publicKeyFingerprint: 'fingerprint-b' }), false);
+  assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(await signFixture({ 4: NOW + 1 }), publicJwk, expected()), false);
+  assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(await signFixture({ 5: NOW + 29 * DAY }), publicJwk, expected()), false);
 });

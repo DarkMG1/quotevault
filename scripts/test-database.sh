@@ -27,6 +27,7 @@ psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-edit.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922020000_envelope_foundation.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922030000_envelope_recovery.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922040000_recovery_device_transition.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-recovery.sql
 createdb "$migration_db"
 psql -X -v ON_ERROR_STOP=1 -d "$migration_db" -f tests/database-migration.sql
