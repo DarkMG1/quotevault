@@ -10,7 +10,7 @@ const fingerprint = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const token = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
 const bundle = { version: 2, iv: 'AAAAAAAAAAAAAAAA', data: 'AAAAAAAAAAAAAAAAAAAAAA==' };
 
-function setup({ rpcReply = () => null, edgeReply = () => null, navigatorValue = undefined } = {}) {
+function setup({ rpcReply = () => null, edgeReply = () => null, navigatorValue = undefined, decryptBundle = undefined } = {}) {
   const states = new Map();
   const calls = [];
   const device = {
@@ -27,7 +27,7 @@ function setup({ rpcReply = () => null, edgeReply = () => null, navigatorValue =
       digestAuthorizationToken: async () => fingerprint,
       fingerprintPublicJwk: async () => fingerprint,
       encryptPrivateBundle: async () => bundle,
-      decryptPrivateBundle: async () => ({ version: 1, privateJwk: { kty: 'RSA' }, authorizationToken: token }),
+      decryptPrivateBundle: decryptBundle ?? (async () => ({ version: 1, privateJwk: { kty: 'RSA' }, authorizationToken: token })),
     },
     './lease': { verifyDeviceLease: async () => true },
     './supabase': { supabase: { rpc: async (name, args) => ({ data: rpcReply(name, args), error: null }), functions: { invoke: async (name, input) => ({ data: edgeReply(name, input), error: null }) } } },
@@ -101,4 +101,13 @@ test('recovery key RPC binds the public key fingerprint and response identifiers
   await assert.rejects(api.createRecoveryKey({ recoveryKeyId: accountId, publicJwk, publicKeyFingerprint: `B${fingerprint.slice(1)}`, encryptedPrivateKey: bundle, kdf: { version: 1, salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600000 }, generation, wrappedKey: 'A'.repeat(512), deviceId, token }), /recovery/i);
   const mismatched = setup({ rpcReply: () => ({ recovery_key_id: deviceId, generation }) });
   await assert.rejects(mismatched.api.createRecoveryKey({ recoveryKeyId: accountId, publicJwk, publicKeyFingerprint: fingerprint, encryptedPrivateKey: bundle, kdf: { version: 1, salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600000 }, generation, wrappedKey: 'A'.repeat(512), deviceId, token }), /recovery/i);
+});
+
+test('decrypting a passkey bundle binds the exact stored protection', async () => {
+  const protection = { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: token, prfSalt: fingerprint, kdf: 'HKDF-SHA-256' };
+  const { api } = setup({ decryptBundle: async (_payload, _key, binding) => { if (binding.protection?.credentialId !== token) throw new Error('AAD mismatch'); throw new Error('post-binding'); } });
+  const key = await webcrypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  const matching = { accountId, deviceId, publicKeyFingerprint: fingerprint, protectionMode: 'passkey-prf', protection, encryptedPrivateBundle: bundle };
+  await assert.rejects(api.decryptDeviceBundle(matching, key), /post-binding/);
+  await assert.rejects(api.decryptDeviceBundle({ ...matching, protection: { ...protection, credentialId: 'AQID' } }, key), /AAD mismatch/);
 });
