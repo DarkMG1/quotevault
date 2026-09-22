@@ -40,3 +40,13 @@ export interface VaultKeyWrapperBinding { vaultId: 'quotevault'; generation: str
 export interface VaultKeyWrapperPlaintext extends VaultKeyWrapperBinding { version: 1; masterKey: Uint8Array }
 export type DeviceLeaseClaims = readonly [1, string, string, string, number, number, string];
 export interface DeviceLease { version: 1; claims: DeviceLeaseClaims; signature: string }
+export interface DeviceLocalState {
+    accountId: string;
+    deviceId: string;
+    protectionMode: 'passkey-prf' | 'remembered';
+    protection: Record<string, unknown>;
+    encryptedPrivateBundle: EnvelopeCiphertext;
+    rememberedKey?: CryptoKey;
+    lease?: DeviceLease;
+    wrapper?: { generation: string; wrappedKey: string };
+}

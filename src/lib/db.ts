@@ -1,10 +1,11 @@
 import Dexie, { type Table } from 'dexie';
-import type { Quote, SyncMetadata, SyncQueueItem } from '../types';
+import type { DeviceLocalState, Quote, SyncMetadata, SyncQueueItem } from '../types';
 
 export class QuoteVaultDB extends Dexie {
     quotes!: Table<Quote, string>;
     syncQueue!: Table<SyncQueueItem, string>;
     metadata!: Table<SyncMetadata, string>;
+    deviceState!: Table<DeviceLocalState, string>;
 
     constructor() {
         super('QuoteVaultDB');
@@ -37,6 +38,12 @@ export class QuoteVaultDB extends Dexie {
                     legacy.error = 'Unsupported legacy sync operation.';
                 }
             });
+        });
+        this.version(3).stores({
+            quotes: 'id, created_at, user_id, author, vault_generation',
+            syncQueue: 'id, operation_id, quote_id, created_at, action, actor_id, vault_generation, status',
+            metadata: 'id',
+            deviceState: 'accountId'
         });
     }
 }
