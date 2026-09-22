@@ -7,6 +7,8 @@ const accountB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const deviceId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const generation = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const bundle = { version: 2, iv: 'AAAAAAAAAAAAAAAA', data: 'AAAAAAAAAAAAAAAAAAAAAA==' };
+const digest = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+const wrapper = 'A'.repeat(512);
 
 function table() {
   const rows = new Map();
@@ -26,16 +28,17 @@ function setup(reply) {
   const device = loadModule('src/lib/device.ts', {
     './db': { db: { deviceState } },
     './supabase': { supabase },
-    './device-crypto': { digestAuthorizationToken: async value => `digest:${value}`, fingerprintPublicJwk: async () => 'fingerprint' },
+    './crypto': { arrayBufferToBase64: value => Buffer.from(value).toString('base64'), base64ToArrayBuffer: value => Uint8Array.from(Buffer.from(value, 'base64')).buffer },
+    './device-crypto': { digestAuthorizationToken: async value => `digest:${value}`, fingerprintPublicJwk: async () => digest },
   }, { crypto: webcrypto, TextEncoder, TextDecoder, atob, btoa, structuredClone });
   return { device, deviceState, calls };
 }
 
 const rememberedKey = await webcrypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-const initial = { accountId: accountA, deviceId, protectionMode: 'remembered', protection: { version: 1, mode: 'remembered' }, encryptedPrivateBundle: bundle, wrapper: { generation, wrappedKey: 'old' } };
+const initial = { accountId: accountA, deviceId, protectionMode: 'remembered', protection: { version: 1, mode: 'remembered' }, encryptedPrivateBundle: bundle, wrapper: { generation, wrappedKey: wrapper } };
 
 {
-  const { device, deviceState, calls } = setup((name) => name === 'complete_device' ? { device_id: deviceId, generation, wrapped_key: 'A'.repeat(512) } : null);
+  const { device, deviceState, calls } = setup((name) => name === 'complete_device' ? { device_id: deviceId, generation, wrapped_key: 'A'.repeat(512), lease_expires_at: '2030-01-01T00:00:00.000Z' } : null);
   await device.saveDeviceState(initial);
   const state = await device.completeDevice(accountA, deviceId, 'raw-token-local-only', rememberedKey);
   assert.equal(state.accountId, accountA);
@@ -48,10 +51,10 @@ const initial = { accountId: accountA, deviceId, protectionMode: 'remembered', p
 
 {
   const { device, calls } = setup((name) => name === 'approve_device' ? { status: 'approved', device_id: deviceId, generation } : null);
-  await device.approveDevice({ requestId: deviceId, ownerId: accountA, publicKeyFingerprint: 'public', enrollmentFingerprint: 'enrollment', wrappedKey: 'wrapper', generation, approverDeviceId: deviceId, approverToken: 'approver-token' });
+  await device.approveDevice({ requestId: deviceId, ownerId: accountA, publicKeyFingerprint: digest, enrollmentFingerprint: digest, wrappedKey: wrapper, generation, approverDeviceId: deviceId, approverToken: digest });
   assert.equal(JSON.stringify(calls[0]), JSON.stringify({ name: 'approve_device', args: {
-    p_request_id: deviceId, p_owner_id: accountA, p_public_key_fingerprint: 'public', p_enrollment_fingerprint: 'enrollment',
-    p_wrapped_key: 'wrapper', p_generation: generation, p_approver_device_id: deviceId, p_approver_token: 'approver-token'
+    p_request_id: deviceId, p_owner_id: accountA, p_public_key_fingerprint: digest, p_enrollment_fingerprint: digest,
+    p_wrapped_key: wrapper, p_generation: generation, p_approver_device_id: deviceId, p_approver_token: digest
   } }));
 }
 
