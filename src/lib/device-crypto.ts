@@ -52,7 +52,13 @@ const exactMasterKey = (value: unknown): Uint8Array => {
 };
 const validRecoveryKdf = (value: unknown): RecoveryKdf => {
     if (!value || typeof value !== 'object') fail();
-    const kdf = value as Partial<RecoveryKdf>;
+    const object = value as object;
+    if (Object.getPrototypeOf(object) !== Object.prototype) fail();
+    const fields = Reflect.ownKeys(object);
+    if (fields.length !== 3 || !fields.every((field) => typeof field === 'string' &&
+        ['version', 'salt', 'iterations'].includes(field) && Object.prototype.propertyIsEnumerable.call(object, field) &&
+        'value' in (Object.getOwnPropertyDescriptor(object, field) ?? {}))) fail();
+    const kdf = object as Partial<RecoveryKdf>;
     if (kdf.version !== 1 || kdf.iterations !== RECOVERY_ITERATIONS) fail();
     const salt = base64ToBytes(kdf.salt);
     try {
@@ -60,7 +66,7 @@ const validRecoveryKdf = (value: unknown): RecoveryKdf => {
     } finally {
         salt.fill(0);
     }
-    return value as RecoveryKdf;
+    return object as RecoveryKdf;
 };
 const validBinding = (binding: BundleBinding): RecoveryKdf | undefined => {
     if (!text(binding.accountId) || !text(binding.recordId) || !text(binding.publicKeyFingerprint) || binding.version !== 1 ||

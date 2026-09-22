@@ -4,7 +4,7 @@ import { webcrypto } from 'node:crypto';
 import { loadModule } from './load-module.mjs';
 
 const cryptoModule = loadModule('src/lib/crypto.ts', {}, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob });
-const cryptoApi = loadModule('src/lib/device-crypto.ts', { './crypto': cryptoModule }, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob });
+const cryptoApi = loadModule('src/lib/device-crypto.ts', { './crypto': cryptoModule }, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob, Object });
 
 const GENERATION_A = 'd4c3b2a1-0000-4000-8000-000000000001';
 const GENERATION_B = 'd4c3b2a1-0000-4000-8000-000000000002';
@@ -129,6 +129,12 @@ test('recovery bundle AAD requires canonical KDF metadata', async () => {
   await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, recoveryKdf: { ...recoveryKdf, salt: 'AA==' } }));
   await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, recoveryKdf: { ...recoveryKdf, salt: 'AAAAAAAAAAAAAAAAAAAAAB==' } }));
   await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, recoveryKdf: { ...recoveryKdf, iterations: 599999 } }));
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, recoveryKdf: { ...recoveryKdf, algorithm: 'PBKDF2' } }));
+  const inheritedKdf = Object.assign(Object.create({ algorithm: 'PBKDF2' }), recoveryKdf);
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, recoveryKdf: inheritedKdf }));
+  const hiddenKdf = { ...recoveryKdf };
+  Object.defineProperty(hiddenKdf, 'algorithm', { value: 'PBKDF2' });
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, recoveryKdf: hiddenKdf }));
 
   const rememberedBinding = { ...binding, protectionMode: 'remembered', recoveryKdf: undefined };
   const rememberedKey = await webcrypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
@@ -138,4 +144,8 @@ test('recovery bundle AAD requires canonical KDF metadata', async () => {
   await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, rememberedKey, { ...rememberedBinding, recoveryKdf }));
   await assert.rejects(cryptoApi.decryptPrivateBundle(legacyEncrypted, rememberedKey, { ...rememberedBinding, recoveryKdf }));
   await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, rememberedKey, { ...rememberedBinding, protectionMode: 'passkey-prf', recoveryKdf }));
+  const passkeyBinding = { ...rememberedBinding, protectionMode: 'passkey-prf' };
+  const passkeyAad = JSON.stringify([1, passkeyBinding.accountId, passkeyBinding.recordId, passkeyBinding.publicKeyFingerprint, passkeyBinding.protectionMode, passkeyBinding.version]);
+  const passkeyEncrypted = await cryptoApi.encryptEnvelope(JSON.stringify(bundle), rememberedKey, passkeyAad);
+  assert.equal(JSON.stringify(await cryptoApi.decryptPrivateBundle(passkeyEncrypted, rememberedKey, passkeyBinding)), JSON.stringify(bundle));
 });
