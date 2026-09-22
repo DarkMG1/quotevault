@@ -95,8 +95,9 @@ test('private bundles authenticate their binding and reject malformed base64', a
   const publicJwk = await webcrypto.subtle.exportKey('jwk', pair.publicKey);
   const fingerprint = await cryptoApi.fingerprintPublicJwk(publicJwk);
   const token = cryptoApi.generateAuthorizationToken();
-  const key = await cryptoApi.deriveRecoveryBundleKey('recovery phrase', { version: 1, salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600000 });
-  const binding = { accountId: 'account-a', recordId: 'device-a', publicKeyFingerprint: fingerprint, protectionMode: 'recovery', version: 1 };
+  const recoveryKdf = { version: 1, salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600000 };
+  const key = await cryptoApi.deriveRecoveryBundleKey('recovery phrase', recoveryKdf);
+  const binding = { accountId: 'account-a', recordId: 'device-a', publicKeyFingerprint: fingerprint, protectionMode: 'recovery', version: 1, recoveryKdf };
   const bundle = { version: 1, privateJwk: await webcrypto.subtle.exportKey('jwk', pair.privateKey), authorizationToken: token };
   const encrypted = await cryptoApi.encryptPrivateBundle(bundle, key, binding);
   assert.equal(JSON.stringify(await cryptoApi.decryptPrivateBundle(encrypted, key, binding)), JSON.stringify(bundle));
@@ -105,9 +106,36 @@ test('private bundles authenticate their binding and reject malformed base64', a
   const otherPrivateJwk = await webcrypto.subtle.exportKey('jwk', otherPair.privateKey);
   await assert.rejects(cryptoApi.encryptPrivateBundle({ ...bundle, privateJwk: otherPrivateJwk }, key, binding));
   const forged = await cryptoApi.encryptEnvelope(JSON.stringify({ ...bundle, privateJwk: otherPrivateJwk }), key,
-    JSON.stringify([1, binding.accountId, binding.recordId, binding.publicKeyFingerprint, binding.protectionMode, binding.version]));
+    JSON.stringify([1, binding.accountId, binding.recordId, binding.publicKeyFingerprint, binding.protectionMode, binding.version, [recoveryKdf.version, recoveryKdf.salt, recoveryKdf.iterations]]));
   await assert.rejects(cryptoApi.decryptPrivateBundle(forged, key, binding));
   await assert.rejects(cryptoApi.decryptPrivateBundle(encrypted, key, { ...binding, accountId: 'account-b' }));
   await assert.rejects(cryptoApi.decryptPrivateBundle({ ...encrypted, iv: '*' }, key, binding));
   await assert.rejects(cryptoApi.decryptPrivateBundle({ ...encrypted, data: `${encrypted.data}*` }, key, binding));
+});
+
+test('recovery bundle AAD requires canonical KDF metadata', async () => {
+  const pair = await cryptoApi.generateWrappingKeyPair();
+  const publicJwk = await webcrypto.subtle.exportKey('jwk', pair.publicKey);
+  const fingerprint = await cryptoApi.fingerprintPublicJwk(publicJwk);
+  const recoveryKdf = { version: 1, salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600000 };
+  const key = await cryptoApi.deriveRecoveryBundleKey('recovery phrase', recoveryKdf);
+  const bundle = { version: 1, privateJwk: await webcrypto.subtle.exportKey('jwk', pair.privateKey), authorizationToken: cryptoApi.generateAuthorizationToken() };
+  const binding = { accountId: 'account-a', recordId: 'recovery-a', publicKeyFingerprint: fingerprint, protectionMode: 'recovery', version: 1, recoveryKdf };
+  const encrypted = await cryptoApi.encryptPrivateBundle(bundle, key, binding);
+
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, recoveryKdf: undefined }));
+  await assert.rejects(cryptoApi.decryptPrivateBundle(encrypted, key, { ...binding, recoveryKdf: { ...recoveryKdf, salt: 'AQAAAAAAAAAAAAAAAAAAAA==' } }));
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, recoveryKdf: { ...recoveryKdf, version: 2 } }));
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, recoveryKdf: { ...recoveryKdf, salt: 'AA==' } }));
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, recoveryKdf: { ...recoveryKdf, salt: 'AAAAAAAAAAAAAAAAAAAAAB==' } }));
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, key, { ...binding, recoveryKdf: { ...recoveryKdf, iterations: 599999 } }));
+
+  const rememberedBinding = { ...binding, protectionMode: 'remembered', recoveryKdf: undefined };
+  const rememberedKey = await webcrypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  const legacyAad = JSON.stringify([1, rememberedBinding.accountId, rememberedBinding.recordId, rememberedBinding.publicKeyFingerprint, rememberedBinding.protectionMode, rememberedBinding.version]);
+  const legacyEncrypted = await cryptoApi.encryptEnvelope(JSON.stringify(bundle), rememberedKey, legacyAad);
+  assert.equal(JSON.stringify(await cryptoApi.decryptPrivateBundle(legacyEncrypted, rememberedKey, rememberedBinding)), JSON.stringify(bundle));
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, rememberedKey, { ...rememberedBinding, recoveryKdf }));
+  await assert.rejects(cryptoApi.decryptPrivateBundle(legacyEncrypted, rememberedKey, { ...rememberedBinding, recoveryKdf }));
+  await assert.rejects(cryptoApi.encryptPrivateBundle(bundle, rememberedKey, { ...rememberedBinding, protectionMode: 'passkey-prf', recoveryKdf }));
 });

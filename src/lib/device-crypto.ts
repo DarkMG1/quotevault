@@ -50,12 +50,30 @@ const exactMasterKey = (value: unknown): Uint8Array => {
     if (!(value instanceof Uint8Array) || value.byteLength !== 32) fail();
     return value as Uint8Array;
 };
-const validBinding = (binding: BundleBinding): void => {
+const validRecoveryKdf = (value: unknown): RecoveryKdf => {
+    if (!value || typeof value !== 'object') fail();
+    const kdf = value as Partial<RecoveryKdf>;
+    if (kdf.version !== 1 || kdf.iterations !== RECOVERY_ITERATIONS) fail();
+    const salt = base64ToBytes(kdf.salt);
+    try {
+        if (salt.byteLength < 16 || salt.byteLength > 64) fail();
+    } finally {
+        salt.fill(0);
+    }
+    return value as RecoveryKdf;
+};
+const validBinding = (binding: BundleBinding): RecoveryKdf | undefined => {
     if (!text(binding.accountId) || !text(binding.recordId) || !text(binding.publicKeyFingerprint) || binding.version !== 1 ||
         !['passkey-prf', 'remembered', 'recovery'].includes(binding.protectionMode)) fail();
+    if (binding.protectionMode === 'recovery') return validRecoveryKdf(binding.recoveryKdf);
+    if (binding.recoveryKdf !== undefined) fail();
 };
 const bundleAad = (binding: BundleBinding): string => {
-    validBinding(binding);
+    const recoveryKdf = validBinding(binding);
+    if (recoveryKdf) {
+        return JSON.stringify([1, binding.accountId, binding.recordId, binding.publicKeyFingerprint, binding.protectionMode, binding.version,
+            [recoveryKdf.version, recoveryKdf.salt, recoveryKdf.iterations]]);
+    }
     return JSON.stringify([1, binding.accountId, binding.recordId, binding.publicKeyFingerprint, binding.protectionMode, binding.version]);
 };
 
@@ -147,9 +165,8 @@ export const digestAuthorizationToken = async (token: string): Promise<string> =
 };
 
 export const deriveRecoveryBundleKey = async (phrase: string, kdf: RecoveryKdf): Promise<CryptoKey> => {
-    if (!text(phrase) || !kdf || kdf.version !== 1 || kdf.iterations !== RECOVERY_ITERATIONS) fail();
-    const salt = base64ToBytes(kdf.salt);
-    if (salt.byteLength < 16 || salt.byteLength > 64) fail();
+    if (!text(phrase)) fail();
+    const salt = base64ToBytes(validRecoveryKdf(kdf).salt);
     const phraseBytes = encoder.encode(phrase);
     try {
         const material = await crypto.subtle.importKey('raw', source(phraseBytes), 'PBKDF2', false, ['deriveKey']);

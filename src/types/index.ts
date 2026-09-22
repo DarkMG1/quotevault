@@ -34,6 +34,7 @@ export interface RecoveryKdf { version: 1; salt: string; iterations: 600000 }
 export interface BundleBinding {
     accountId: string; recordId: string; publicKeyFingerprint: string;
     protectionMode: 'passkey-prf' | 'remembered' | 'recovery'; version: 1;
+    recoveryKdf?: RecoveryKdf;
 }
 export interface PrivateDeviceBundle { version: 1; privateJwk: JsonWebKey; authorizationToken: string }
 export interface VaultKeyWrapperBinding { vaultId: 'quotevault'; generation: string; targetFingerprint: string }
