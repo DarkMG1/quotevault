@@ -9,13 +9,14 @@ const generation = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const bundle = { version: 2, iv: 'AAAAAAAAAAAAAAAA', data: 'AAAAAAAAAAAAAAAAAAAAAA==' };
 const digest = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const wrapper = 'A'.repeat(512);
+const token = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
 
 function table() {
   const rows = new Map();
   return {
     rows,
-    async get(id) { return rows.get(id); },
-    async put(value) { rows.set(value.accountId, value); },
+    async get(id) { return structuredClone(rows.get(id)); },
+    async put(value) { rows.set(value.accountId, structuredClone(value)); },
     async delete(id) { rows.delete(id); },
     async clear() { rows.clear(); },
   };
@@ -40,12 +41,12 @@ const initial = { accountId: accountA, deviceId, protectionMode: 'remembered', p
 {
   const { device, deviceState, calls } = setup((name) => name === 'complete_device' ? { device_id: deviceId, generation, wrapped_key: 'A'.repeat(512), lease_expires_at: '2030-01-01T00:00:00.000Z' } : null);
   await device.saveDeviceState(initial);
-  const state = await device.completeDevice(accountA, deviceId, 'raw-token-local-only', rememberedKey);
+  const state = await device.completeDevice(accountA, deviceId, token, rememberedKey);
   assert.equal(state.accountId, accountA);
   assert.equal(state.rememberedKey.extractable, false);
-  assert.equal(JSON.stringify(state).includes('raw-token-local-only'), false);
+  assert.equal(JSON.stringify(state).includes(token), false);
   assert.equal(await device.loadDeviceState(accountB), null);
-  assert.equal(JSON.stringify(calls[0]), JSON.stringify({ name: 'complete_device', args: { p_device_id: deviceId, p_token: 'raw-token-local-only', p_generation: generation } }));
+  assert.equal(JSON.stringify(calls[0]), JSON.stringify({ name: 'complete_device', args: { p_device_id: deviceId, p_token: token, p_generation: generation } }));
   assert.equal(deviceState.rows.size, 1);
 }
 
@@ -59,8 +60,10 @@ const initial = { accountId: accountA, deviceId, protectionMode: 'remembered', p
 }
 
 {
-  const { device } = setup(() => ({ device_id: 'not-a-uuid', generation, wrapped_key: 'bad' }));
-  await assert.rejects(device.completeDevice(accountA, deviceId, 'token', rememberedKey), /missing|Invalid local device state/);
+  const { device, calls } = setup(() => ({ device_id: 'not-a-uuid', generation, wrapped_key: 'bad', lease_expires_at: '2030-01-01T00:00:00.000Z' }));
+  await device.saveDeviceState(initial);
+  await assert.rejects(device.completeDevice(accountA, deviceId, token, rememberedKey), /Invalid device/);
+  assert.equal(calls.length, 1);
 }
 
 {
@@ -70,7 +73,7 @@ const initial = { accountId: accountA, deviceId, protectionMode: 'remembered', p
   await device.deleteDeviceState(accountA);
   assert.equal(deviceState.rows.has(accountA), false);
   assert.equal(deviceState.rows.has(accountB), true);
-  await device.deleteDeviceState(accountB, true);
+  await device.deleteDeviceState(accountB);
   assert.equal(deviceState.rows.size, 0);
 }
 
