@@ -62,9 +62,9 @@ begin
      or exists(select 1 from public.vault_recovery_keys where id = recovery_id and status <> 'revoked') then
     raise exception 'removal did not map allowlist identity to auth-owned records';
   end if;
-  if (public.verify_member_session_invalidation(other_id)->>'owner_id' <> other_id::text
-     or (public.verify_member_session_invalidation(member_id)) is not null
-     or (public.verify_member_session_invalidation(null)) is not null then
+  if public.verify_member_session_invalidation(other_id)->>'owner_id' <> other_id::text
+     or public.verify_member_session_invalidation(member_id) is not null
+     or public.verify_member_session_invalidation(null) is not null then
     raise exception 'session invalidation proof did not bind removed owner';
   end if;
   perform set_config('request.jwt.claim.sub', member_id::text, true);
