@@ -66,3 +66,23 @@ test('passkey unlock requires a PRF result and accepts a local challenge offline
   assert.equal(calls[0].publicKey.userVerification, 'required');
   await assert.rejects(setup({ navigatorValue: { credentials: { get: async () => null } } }).api.unlockPasskey(protection), /Passkey/i);
 });
+
+test('passkey registration uses a fresh Edge challenge, fixed RP, UV, and PRF result', async () => {
+  const calls = [];
+  const credential = { rawId: Uint8Array.from([1, 2, 3]).buffer, getClientExtensionResults: () => ({ prf: { enabled: true, results: { first: new Uint8Array(32).buffer } } }) };
+  const { api } = setup({ edgeReply: () => ({ challenge: fingerprint }), navigatorValue: { credentials: { create: async options => { calls.push(options); return credential; }, get: async () => credential } } });
+  const result = await api.registerPasskey({ userId: accountId, userName: 'member@example.com', displayName: 'Member' });
+  assert.equal(result.rpId, 'quotes.darkmg1.dev');
+  assert.equal(calls[0].publicKey.authenticatorSelection.userVerification, 'required');
+  assert.equal(calls[0].publicKey.attestation, 'none');
+  await assert.rejects(setup({ edgeReply: () => ({ challenge: fingerprint }), navigatorValue: { credentials: { create: async () => null } } }).api.registerPasskey({ userId: accountId, userName: 'member@example.com', displayName: 'Member' }), /Passkey/i);
+});
+
+test('recovery contracts bind IDs and reject malformed secret-bearing responses', async () => {
+  const begin = { challengeId: deviceId, recoveryKeyId: accountId, publicKeyFingerprint: fingerprint, ciphertext: 'A'.repeat(512), encryptedPrivateKey: bundle, kdf: { version: 1, salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600000 } };
+  const { api } = setup({ edgeReply: () => begin, rpcReply: name => name === 'complete_recovery' ? { recovery_key_id: accountId, generation, wrapped_key: 'A'.repeat(512), transition_token: token } : { device_id: deviceId, generation } });
+  assert.equal((await api.beginRecovery()).recoveryKeyId, accountId);
+  assert.equal((await api.completeRecovery({ challengeId: deviceId, response: token })).generation, generation);
+  assert.equal((await api.activateRecoveredDevice({ challengeId: deviceId, transitionToken: token, requestId: deviceId, enrollmentFingerprint: fingerprint, generation, wrappedKey: 'A'.repeat(512) })).deviceId, deviceId);
+  await assert.rejects(setup({ edgeReply: () => ({ ...begin, token: token }) }).api.beginRecovery(), /recovery/i);
+});
