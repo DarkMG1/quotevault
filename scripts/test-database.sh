@@ -35,6 +35,8 @@ psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922070000_b
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-bootstrap.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922080000_device_authorized_rpcs.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-auth.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922090000_device_authorized_rpc_fixes.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-auth-fixes.sql
 createdb "$migration_db"
 psql -X -v ON_ERROR_STOP=1 -d "$migration_db" -f tests/database-migration.sql
 createdb "$hardening_db"
