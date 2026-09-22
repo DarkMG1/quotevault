@@ -14,7 +14,7 @@ function setup({ rpcReply = () => null, edgeReply = () => null, navigatorValue =
   const states = new Map();
   const calls = [];
   const device = {
-    validateDeviceProtection(value, mode) { if (mode === 'remembered' && JSON.stringify(value) === JSON.stringify({ version: 1, mode: 'remembered' })) return value; if (mode === 'passkey-prf' && value?.version === 1 && value.rpId === 'quotes.darkmg1.dev' && typeof value.credentialId === 'string' && typeof value.prfSalt === 'string' && Object.keys(value).length === 4) return value; throw new Error('Invalid device protection.'); },
+    validateDeviceProtection(value, mode) { if (mode === 'remembered' && JSON.stringify(value) === JSON.stringify({ version: 1, mode: 'remembered' })) return value; if (mode === 'passkey-prf' && value?.version === 1 && value.rpId === 'quotes.darkmg1.dev' && value.kdf === 'HKDF-SHA-256' && typeof value.credentialId === 'string' && typeof value.prfSalt === 'string' && Object.keys(value).length === 5) return value; throw new Error('Invalid device protection.'); },
     async saveDeviceState(value) { states.set(value.accountId, structuredClone(value)); },
     async loadDeviceState(id) { return structuredClone(states.get(id) ?? null); },
     async requestDevice(input) { calls.push(['request_device', input]); return { requestId: input.deviceId, deviceId: input.deviceId, enrollmentFingerprint: fingerprint, expiresAt: '2030-01-01T00:00:00.000Z' }; },
@@ -37,7 +37,7 @@ function setup({ rpcReply = () => null, edgeReply = () => null, navigatorValue =
 }
 
 test('passkey restore metadata rejects server wrappers, tokens, and malformed protection', async () => {
-  const good = { generation, devices: [{ device_id: deviceId, protection_mode: 'passkey-prf', protection: { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: token, prfSalt: fingerprint }, public_key_fingerprint: fingerprint, encrypted_private_bundle: bundle }] };
+  const good = { generation, devices: [{ device_id: deviceId, protection_mode: 'passkey-prf', protection: { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: token, prfSalt: fingerprint, kdf: 'HKDF-SHA-256' }, public_key_fingerprint: fingerprint, encrypted_private_bundle: bundle }] };
   const { api } = setup({ rpcReply: () => good });
   const result = await api.getPasskeyRestoreDevices();
   assert.equal(result[0].deviceId, deviceId);
@@ -60,10 +60,16 @@ test('passkey unlock requires a PRF result and accepts a local challenge offline
   const calls = [];
   const credential = { rawId: Uint8Array.from([1, 2, 3]).buffer, getClientExtensionResults: () => ({ prf: { results: { first: new Uint8Array(32).buffer } } }) };
   const { api } = setup({ navigatorValue: { credentials: { get: async options => { calls.push(options); return credential; } } } });
-  const protection = { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: 'AQID', prfSalt: fingerprint };
+  const protection = { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: 'AQID', prfSalt: fingerprint, kdf: 'HKDF-SHA-256' };
   const key = await api.unlockPasskey(protection);
+  const second = await api.unlockPasskey(protection);
   assert.equal(key.extractable, false);
   assert.equal(calls[0].publicKey.userVerification, 'required');
+  const iv = new Uint8Array(12);
+  const ciphertext = await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode('bundle'));
+  assert.equal(new TextDecoder().decode(await webcrypto.subtle.decrypt({ name: 'AES-GCM', iv }, second, ciphertext)), 'bundle');
+  const direct = await webcrypto.subtle.importKey('raw', new Uint8Array(32), 'AES-GCM', false, ['decrypt']);
+  await assert.rejects(webcrypto.subtle.decrypt({ name: 'AES-GCM', iv }, direct, ciphertext));
   await assert.rejects(setup({ navigatorValue: { credentials: { get: async () => null } } }).api.unlockPasskey(protection), /Passkey/i);
 });
 

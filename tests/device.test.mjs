@@ -55,13 +55,14 @@ const initial = { accountId: accountA, deviceId, publicKeyFingerprint: digest, p
     { version: 2, mode: 'remembered' },
     { version: 1, mode: 'passkey-prf' },
   ]) await assert.rejects(device.saveDeviceState({ ...initial, protection, rememberedKey }), /protection/i);
-  const passkey = { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: token, prfSalt: digest };
+  const passkey = { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: token, prfSalt: digest, kdf: 'HKDF-SHA-256' };
   await device.saveDeviceState({ ...initial, protectionMode: 'passkey-prf', protection: passkey });
   for (const protection of [
     { ...passkey, extra: true },
     { ...passkey, rpId: 'evil.example' },
     { ...passkey, credentialId: 'AA==' },
     { ...passkey, prfSalt: digest.slice(1) },
+    { ...passkey, kdf: 'PBKDF2' },
   ]) await assert.rejects(device.saveDeviceState({ ...initial, protectionMode: 'passkey-prf', protection }), /protection/i);
 }
 
@@ -105,7 +106,7 @@ const initial = { accountId: accountA, deviceId, publicKeyFingerprint: digest, p
 }
 
 {
-  const passkeyState = { ...initial, protectionMode: 'passkey-prf', protection: { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: token, prfSalt: digest } };
+  const passkeyState = { ...initial, protectionMode: 'passkey-prf', protection: { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: token, prfSalt: digest, kdf: 'HKDF-SHA-256' } };
   const { device, deviceState, calls } = setup(() => ({ device_id: deviceId, generation, wrapped_key: wrapper, lease_expires_at: '2030-01-01T00:00:00.000Z' }));
   await device.saveDeviceState(passkeyState);
   const result = await device.completeDevice(accountA, deviceId, token);

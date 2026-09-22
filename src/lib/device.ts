@@ -42,10 +42,10 @@ const exactObject = (value: unknown, fields: string[]): Record<string, unknown> 
     return object;
 };
 export const validateDeviceProtection = (value: unknown, protectionMode: 'passkey-prf' | 'remembered'): Record<string, unknown> => {
-    const protection = protectionMode === 'remembered' ? exactObject(value, ['version', 'mode']) : exactObject(value, ['version', 'rpId', 'credentialId', 'prfSalt']);
+    const protection = protectionMode === 'remembered' ? exactObject(value, ['version', 'mode']) : exactObject(value, ['version', 'rpId', 'credentialId', 'prfSalt', 'kdf']);
     if (protectionMode === 'remembered' && (protection.version !== 1 || protection.mode !== 'remembered')) invalid('Invalid device protection.');
     const credentialLength = base64urlLength(protection.credentialId);
-    if (protectionMode === 'passkey-prf' && (protection.version !== 1 || protection.rpId !== 'quotes.darkmg1.dev' || credentialLength === null || credentialLength < 1 || credentialLength > 1024 || !base64urlBytes(protection.prfSalt, 32))) invalid('Invalid device protection.');
+    if (protectionMode === 'passkey-prf' && (protection.version !== 1 || protection.rpId !== 'quotes.darkmg1.dev' || protection.kdf !== 'HKDF-SHA-256' || credentialLength === null || credentialLength < 1 || credentialLength > 1023 || !base64urlBytes(protection.prfSalt, 32))) invalid('Invalid device protection.');
     return protection;
 };
 const kind = (value: unknown): 'first' | 'additional' | 'recovery' => value === 'first' || value === 'additional' || value === 'recovery' ? value : invalid('Invalid device request kind.');
