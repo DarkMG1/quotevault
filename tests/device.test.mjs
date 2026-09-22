@@ -155,7 +155,8 @@ for (const [label, reply] of [
   await device.deleteDeviceState(accountA);
   assert.equal(deviceState.rows.has(accountA), false);
   assert.equal(deviceState.rows.has(accountB), true);
-  await device.deleteDeviceState(accountB);
+  await device.deleteDeviceState(accountB, true);
+  assert.equal(deviceState.rows.size, 0);
   assert.equal(deviceState.rows.size, 0);
 }
 
