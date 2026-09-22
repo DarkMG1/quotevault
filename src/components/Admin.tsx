@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
 import { isAdminUser, ADMIN_EMAIL } from '../lib/access';
 import { createVaultConfig } from '../lib/crypto';
-import { cacheVaultState, parseVaultState } from '../lib/vault';
+import { cacheVaultState, parseLegacyVaultMutation } from '../lib/vault';
 import { clearLocalSyncState } from '../lib/sync';
 import { useCrypto } from '../hooks/useCrypto';
 import { ShieldAlert, Users, Plus, Trash2, Loader2, RefreshCw, AlertTriangle } from 'lucide-react';
@@ -99,7 +99,7 @@ export const AdminDashboard = () => {
                 p_expected_generation: vaultGeneration, p_kdf: config.kdf, p_verifier: config.verifier,
             });
             if (resetError) throw new Error(resetError.message);
-            cacheVaultState(user.id, parseVaultState(data));
+            cacheVaultState(user.id, parseLegacyVaultMutation(data));
             lockVault();
             await clearLocalSyncState();
             setVaultKey('');

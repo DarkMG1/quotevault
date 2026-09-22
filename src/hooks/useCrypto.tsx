@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { createVaultConfig, unlockWithVerifier } from '../lib/crypto';
-import { cacheVaultState, isLegacyVaultState, loadVaultState, parseVaultState, readCachedVaultState } from '../lib/vault';
+import { cacheVaultState, isLegacyVaultState, loadVaultState, parseLegacyVaultMutation, readCachedVaultState } from '../lib/vault';
 import type { VaultState } from '../lib/vault';
 import { supabase } from '../lib/supabase';
 import { Lock, Loader2 } from 'lucide-react';
@@ -102,7 +102,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
                     p_expected_generation: state.generation, p_kdf: config.kdf, p_verifier: config.verifier,
                 });
                 if (initError) throw new Error(initError.message);
-                const initialized = parseVaultState(data);
+                const initialized = parseLegacyVaultMutation(data);
                 if (!isLegacyVaultState(initialized)) throw new Error('Device vault setup is required.');
                 if (unlockRequest.current !== version) return;
                 cacheVaultState(user.id, initialized);

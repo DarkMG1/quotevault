@@ -78,3 +78,13 @@ test('only cached pre-migration legacy settings are normalized for offline compa
   app.stored.set('quotevault:settings:bob', JSON.stringify({ ...state, envelope_status: 'active' }));
   assert.equal(app.readCachedVaultState('bob'), null);
 });
+
+test('legacy vault mutation responses normalize only the known pre-union shape', () => {
+  const app = setup();
+  const { envelope_status, prepared_generation, ...mutation } = state;
+  const initialized = app.parseLegacyVaultMutation(mutation);
+  assert.equal(initialized.envelope_status, 'legacy');
+  assert.equal(initialized.prepared_generation, null);
+  assert.throws(() => app.parseLegacyVaultMutation({ ...mutation, envelope_status: 'legacy' }), /Invalid/);
+  assert.throws(() => app.parseLegacyVaultMutation({ ...mutation, prepared_generation: null }), /Invalid/);
+});

@@ -46,6 +46,12 @@ export function parseVaultState(value: unknown): VaultState {
     return { ...base, envelope_status: status, legacy_generation: state.legacy_generation as string | null, kdf, verifier } as LegacyVaultState;
 }
 
+export function parseLegacyVaultMutation(value: unknown): LegacyVaultState {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || 'envelope_status' in value || 'prepared_generation' in value) invalid();
+    return parseVaultState({ ...(value as Record<string, unknown>), envelope_status: 'legacy', prepared_generation: null }) as LegacyVaultState;
+}
+
 const cacheKey = (userId: string) => `quotevault:settings:${userId}`;
 export function cacheVaultState(userId: string, state: VaultState) {
     // Public derivation metadata and authenticated ciphertext only; never the key/password.
