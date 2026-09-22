@@ -103,17 +103,20 @@ export const encryptedRecoveryResponse = async (value: unknown): Promise<Record<
   }
 };
 
+export const webauthnChallenge = (purpose: unknown): { purpose: 'registration' | 'restoration'; challenge: string } | null => {
+  if (purpose !== 'registration' && purpose !== 'restoration') return null;
+  return { purpose, challenge: base64url(crypto.getRandomValues(new Uint8Array(32))) };
+};
+
 const serve = async (request: Request): Promise<Response> => {
   if (request.method === 'OPTIONS') return new Response(null, { headers: { 'access-control-allow-origin': 'https://quotes.darkmg1.dev', 'access-control-allow-headers': 'authorization, content-type', 'access-control-allow-methods': 'POST, OPTIONS', 'vary': 'Origin' } });
   if (request.method !== 'POST') return reply(405, { error: 'method_not_allowed' });
   const url = Deno.env.get('SUPABASE_URL');
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
-  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  const signingJwk = Deno.env.get('DEVICE_LEASE_PRIVATE_JWK');
   const authorization = request.headers.get('authorization');
   if (!authorization || !/^Bearer\s+\S+$/.test(authorization)) return reply(401, { error: 'unauthorized' });
-  if (!url || !anonKey || !serviceKey || !signingJwk) return reply(500, { error: 'configuration_error' });
-  let body: { action?: unknown; deviceId?: unknown; token?: unknown };
+  if (!url || !anonKey) return reply(500, { error: 'configuration_error' });
+  let body: { action?: unknown; deviceId?: unknown; token?: unknown; purpose?: unknown };
   try { body = await request.json(); } catch { return reply(400, { error: 'invalid_request' }); }
   if (typeof body.action !== 'string') return reply(400, { error: 'invalid_request' });
   const userClient = createClient(url, anonKey, { global: { headers: { authorization } } });
@@ -121,6 +124,8 @@ const serve = async (request: Request): Promise<Response> => {
   if (userError || !userData.user) return reply(401, { error: 'unauthorized' });
   if (body.action === 'renew') {
     if (typeof body.deviceId !== 'string' || typeof body.token !== 'string') return reply(400, { error: 'invalid_request' });
+    const signingJwk = Deno.env.get('DEVICE_LEASE_PRIVATE_JWK');
+    if (!signingJwk) return reply(500, { error: 'configuration_error' });
     const { data: claims, error } = await userClient.rpc('renew_device_lease', { p_device_id: body.deviceId, p_token: body.token });
     if (error || !validLeaseClaims(claims, body.deviceId, userData.user.id)) return reply(403, { error: 'lease_denied' });
     try {
@@ -130,6 +135,8 @@ const serve = async (request: Request): Promise<Response> => {
     } catch { return reply(500, { error: 'signing_error' }); }
   }
   if (body.action === 'begin_recovery') {
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    if (!serviceKey) return reply(500, { error: 'configuration_error' });
     const serviceClient = createClient(url, serviceKey);
     const { data, error } = await serviceClient.rpc('begin_recovery', { p_owner_id: userData.user.id });
     if (error) return reply(403, { error: 'recovery_denied' });
@@ -137,6 +144,12 @@ const serve = async (request: Request): Promise<Response> => {
       const response = await encryptedRecoveryResponse(data);
       return response ? reply(200, response) : reply(403, { error: 'recovery_denied' });
     } catch { return reply(500, { error: 'recovery_error' }); }
+  }
+  if (body.action === 'webauthn_challenge') {
+    const challenge = webauthnChallenge(body.purpose);
+    if (!challenge) return reply(400, { error: 'invalid_request' });
+    const { data, error } = await userClient.rpc('get_vault_state');
+    return !error && data ? reply(200, challenge) : reply(403, { error: 'webauthn_denied' });
   }
   return reply(404, { error: 'unknown_action' });
 };

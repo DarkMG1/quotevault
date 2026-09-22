@@ -1,4 +1,4 @@
-import { encryptedRecoveryResponse, recoveryPublicKeyFingerprint, signLease } from './index.ts';
+import { encryptedRecoveryResponse, recoveryPublicKeyFingerprint, signLease, webauthnChallenge } from './index.ts';
 import { verifyDeviceLeaseWithPublicKey } from '../../../src/lib/lease.ts';
 import type { DeviceLease, DeviceLeaseClaims } from '../../../src/types/index.ts';
 
@@ -37,4 +37,13 @@ Deno.test('Edge signatures verify in the browser verifier and recovery ciphertex
   ciphertext.fill(0);
   plaintext.fill(0);
   signature.fill(0);
+});
+
+Deno.test('WebAuthn challenges are fresh canonical 256-bit values for exact purposes', () => {
+  const registration = webauthnChallenge('registration');
+  const restoration = webauthnChallenge('restoration');
+  if (!registration || !restoration || registration.challenge === restoration.challenge
+    || !/^[A-Za-z0-9_-]{43}$/.test(registration.challenge)
+    || registration.purpose !== 'registration' || restoration.purpose !== 'restoration'
+    || webauthnChallenge('anything-else') !== null) throw new Error('invalid WebAuthn challenge response');
 });

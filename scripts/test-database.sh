@@ -30,6 +30,8 @@ psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922030000_e
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922040000_recovery_device_transition.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922050000_recovery_binding_metadata.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-recovery.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922060000_device_bootstrap.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-bootstrap.sql
 createdb "$migration_db"
 psql -X -v ON_ERROR_STOP=1 -d "$migration_db" -f tests/database-migration.sql
 createdb "$hardening_db"
