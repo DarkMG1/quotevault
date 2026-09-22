@@ -101,7 +101,7 @@ begin
 
   update public.vault_state set envelope_status = 'active', prepared_generation = gen_random_uuid() where singleton;
   perform set_config('request.jwt.claim.sub', member_id::text, true);
-  state := public.get_vault_state();
+  state := public.get_vault_state(passkey_id, device_token);
   if state->>'envelope_status' <> 'active' or state->>'generation' is null or not state ? 'prepared_generation'
      or state ? 'kdf' or state ? 'verifier' or state ? 'legacy_generation' then
     raise exception 'active bootstrap leaked legacy verifier material';
