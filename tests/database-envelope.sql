@@ -9,12 +9,15 @@ declare
   other_id uuid := 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
   generation uuid;
   request_id uuid;
+  expired_request_id uuid;
   device_id uuid;
   token text := 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-  token_digest text := encode(sha256(decode(token || '=', 'base64')), 'hex');
-  public_jwk jsonb := jsonb_build_object('kty', 'RSA', 'n', repeat('A', 512), 'e', 'AQAB');
+  token_digest text := rtrim(replace(replace(replace(encode(sha256(decode(token || '=', 'base64')), 'base64'), E'\n', ''), '+', '-'), '/', '_'), '=');
+  public_jwk jsonb := jsonb_build_object('kty', 'RSA', 'n', rtrim(replace(replace(replace(encode(decode('80' || repeat('00', 383), 'hex'), 'base64'), E'\n', ''), '+', '-'), '/', '_'), '='), 'e', 'AQAB');
   protection jsonb := '{"version":1,"mode":"remembered"}'::jsonb;
-  fingerprint text := 'fp-abcdef';
+  fingerprint text := repeat('B', 43);
+  public_fingerprint text := repeat('C', 43);
+  bundle jsonb := jsonb_build_object('version', 2, 'iv', repeat('A', 16), 'data', repeat('A', 22));
   response jsonb;
 begin
   select vs.generation into generation from public.vault_state vs where singleton;
@@ -26,6 +29,10 @@ begin
          (gen_random_uuid(), admin_id, 'authenticated', 'authenticated', 'darkmgdevelopment@gmail.com', 'x', now())
          ,(gen_random_uuid(), other_id, 'authenticated', 'authenticated', 'other@example.invalid', 'x', now())
   on conflict (id) do nothing;
+  insert into public.quotes(id, text, author, context, quote_date, created_at, user_id, vault_generation)
+  values ('dddddddd-dddd-4ddd-8ddd-dddddddddddd', chr(36)||chr(36)||'E2E'||chr(36)||chr(36) || jsonb_build_object('iv', repeat('A', 16), 'data', repeat('A', 24))::text,
+          'ENCRYPTED', 'ENCRYPTED', current_date, now(), member_id, generation)
+  on conflict (id) do nothing;
 
   perform set_config('request.jwt.claim.sub', member_id::text, true);
   if public.qv_authorize_device('00000000-0000-4000-8000-000000000000', token, generation, 'sync') is not null then
@@ -33,7 +40,7 @@ begin
   end if;
 
   response := public.request_device(
-    member_id, 'new-device', public_jwk, fingerprint, token_digest, 'remembered', protection, 'first');
+    member_id, 'new-device', public_jwk, fingerprint, public_fingerprint, token_digest, 'remembered', protection, bundle, 'first');
   request_id := (response->>'request_id')::uuid;
   device_id := (response->>'device_id')::uuid;
   if response ? 'wrapped_key' then raise exception 'pending request exposed wrapper'; end if;
@@ -42,13 +49,18 @@ begin
   end if;
 
   perform set_config('request.jwt.claim.sub', admin_id::text, true);
-  response := public.approve_device(request_id, member_id, fingerprint, 'wrapped', null);
+  begin
+    perform public.approve_device(request_id, member_id, public_fingerprint, repeat('D', 43), 'wrapped', generation, null, null);
+    raise exception 'changed enrollment fingerprint approved';
+  exception when sqlstate '40001' then null;
+  end;
+  response := public.approve_device(request_id, member_id, public_fingerprint, fingerprint, 'wrapped', generation, null, null);
   if response->>'status' <> 'approved' then raise exception 'approval did not succeed'; end if;
   if (select count(*) from public.vault_device_wrappers w where w.device_id = (response->>'device_id')::uuid) <> 1 then
     raise exception 'approval did not store exactly one wrapper';
   end if;
   begin
-    perform public.approve_device(request_id, member_id, fingerprint, 'wrapped-again', null);
+    perform public.approve_device(request_id, member_id, public_fingerprint, fingerprint, 'wrapped-again', generation, null, null);
     raise exception 'approval replay succeeded';
   exception when sqlstate '40001' then null;
   end;
@@ -57,12 +69,15 @@ begin
   if (public.complete_device(device_id, token, generation)->>'device_id')::uuid <> device_id then
     raise exception 'device completion failed';
   end if;
-  if public.complete_device(device_id, 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', generation) is not null then
+  if public.complete_device(device_id, repeat('B', 43), generation) is not null then
     raise exception 'wrong token completed device';
   end if;
   if public.complete_device(device_id, token, gen_random_uuid()) is not null then
     raise exception 'wrong generation completed device';
   end if;
+  update public.vault_devices set lease_expires_at = now() - interval '1 second' where id = device_id;
+  if public.qv_authorize_device(device_id, token, generation, 'sync') is not null then raise exception 'expired lease authorized sync'; end if;
+  if public.qv_authorize_device(device_id, token, generation, 'lease_renewal') is null then raise exception 'expired lease could not renew'; end if;
   perform set_config('request.jwt.claim.sub', other_id::text, true);
   if public.complete_device(device_id, token, generation) is not null then
     raise exception 'cross-account completed device';
@@ -72,14 +87,29 @@ begin
   if public.qv_authorize_device(device_id, token, generation, 'sync') is not null then
     raise exception 'revoked device authorized';
   end if;
+
+  perform set_config('request.jwt.claim.sub', member_id::text, true);
+  response := public.request_device(member_id, 'expired-device', public_jwk, fingerprint, public_fingerprint, token_digest, 'remembered', protection, bundle, 'additional');
+  expired_request_id := (response->>'request_id')::uuid;
+  update public.vault_devices set expires_at = now() - interval '1 second' where id = expired_request_id;
+  perform set_config('request.jwt.claim.sub', admin_id::text, true);
+  begin
+    perform public.approve_device(expired_request_id, member_id, public_fingerprint, fingerprint, 'wrapped', generation, null, null);
+    raise exception 'expired request approved';
+  exception when sqlstate '40001' then null;
+  end;
 end $$;
 
 -- Direct quote reads remain available in legacy mode and are hidden once active.
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', true);
 do $$
+declare
+  visible_count integer;
 begin
-  perform * from public.quotes;
+  select count(*) into visible_count from public.quotes;
+  if visible_count = 0 then raise exception 'legacy encrypted quote fixture was not visible'; end if;
+  perform public.sync_quotes((public.get_vault_state()->>'generation')::uuid, null, '[]'::jsonb);
 end $$;
 
 reset role;
@@ -91,6 +121,11 @@ declare
 begin
   select count(*) into visible_count from public.quotes;
   if visible_count <> 0 then raise exception 'direct quote select bypassed device authorization'; end if;
+  begin
+    perform count(*) from public.vault_device_wrappers;
+    raise exception 'direct device wrapper select bypassed RPC boundary';
+  exception when insufficient_privilege then null;
+  end;
 end $$;
 
 rollback;
