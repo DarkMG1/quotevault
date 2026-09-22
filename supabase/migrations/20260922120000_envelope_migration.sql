@@ -124,7 +124,7 @@ declare d public.vault_devices%rowtype; b bytea;
 begin
   select * into d from public.vault_devices where id=p_device_id;
   b:=public.qv_base64url_bytes(p_token,32);
-  return auth.uid() is not null and d.owner_id=auth.uid() and d.status='active' and d.lease_expires_at>now() and b is not null and rtrim(replace(replace(replace(encode(sha256(b),'base64'),E'\n',''),'+','-'),'/','_'),'=')=d.authorization_token_digest;
+  return auth.uid() is not null and public.qv_is_member() is true and p_state.generation is not null and p_state.envelope_status in ('preparing','maintenance') and d.owner_id=auth.uid() and d.status='active' and d.lease_expires_at>now() and b is not null and rtrim(replace(replace(replace(encode(sha256(b),'base64'),E'\n',''),'+','-'),'/','_'),'=')=d.authorization_token_digest;
 exception when others then return false;
 end $ok$;
 
@@ -169,7 +169,6 @@ begin
     insert into public.quotes(id,text,author,context,quote_date,created_at,user_id,vault_generation) values(copy.quote_id,copy.encrypted_row->>'text',copy.encrypted_row->>'author',copy.encrypted_row->>'context',nullif(copy.encrypted_row->>'quote_date','')::date,(copy.encrypted_row->>'created_at')::timestamptz,(copy.encrypted_row->>'user_id')::uuid,migration.source_generation);
   end loop;
   update public.vault_state set generation=(migration.source_state->>'generation')::uuid,revision=(migration.source_state->>'revision')::bigint,envelope_status=migration.source_state->>'envelope_status',prepared_generation=nullif(migration.source_state->>'prepared_generation','')::uuid,active_migration_id=nullif(migration.source_state->>'active_migration_id','')::uuid where singleton;
-  perform set_config('qv.migration_internal','on',true);
   delete from public.vault_device_wrappers where generation=migration.target_generation;
   delete from public.vault_recovery_wrappers where generation=migration.target_generation;
   delete from public.vault_migration_quote_copies where migration_id=migration.id;
@@ -196,13 +195,16 @@ end $finalize$;
 
 create or replace function public.purge_expired_vault_rollback()
 returns integer language plpgsql security definer set search_path = public, pg_temp as $purge$
-declare n integer;
+declare n integer:=0; state public.vault_state%rowtype; migration public.vault_migrations%rowtype;
 begin
-  with expired as (select id from public.vault_migrations where status='activated' and rollback_expires_at<=now()), deleted as (delete from public.vault_migration_quote_copies where migration_id in (select id from expired) returning migration_id)
-  select count(distinct migration_id) into n from deleted;
-  update public.vault_migrations set status='finalized' where status='activated' and rollback_expires_at<=now();
-  update public.vault_state set envelope_status='active',prepared_generation=null,active_migration_id=null where active_migration_id in (select id from public.vault_migrations where status='finalized');
-  return coalesce(n,0);
+  select * into state from public.vault_state where singleton for update;
+  for migration in select * from public.vault_migrations where status='activated' and rollback_expires_at<=now() order by id for update skip locked loop
+    delete from public.vault_migration_quote_copies where migration_id=migration.id;
+    update public.vault_migrations set status='finalized' where id=migration.id;
+    if state.active_migration_id=migration.id then update public.vault_state set envelope_status='active',prepared_generation=null,active_migration_id=null where singleton; end if;
+    n:=n+1;
+  end loop;
+  return n;
 end $purge$;
 
 create or replace function public.get_envelope_migration_snapshot(p_migration_id uuid,p_device_id uuid,p_token text)
@@ -218,7 +220,7 @@ end $snapshot$;
 create or replace function public.qv_reject_maintenance_device_mutation()
 returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
 begin
-  if current_setting('qv.migration_internal',true) is distinct from 'on' and exists(select 1 from public.vault_state where singleton and envelope_status='maintenance') then
+  if exists(select 1 from public.vault_state where singleton and envelope_status='maintenance') then
     raise exception 'Vault migration verification is in progress' using errcode='40001';
   end if;
   return coalesce(new,old);

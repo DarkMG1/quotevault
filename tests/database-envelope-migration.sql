@@ -16,6 +16,7 @@ declare
   staged jsonb;
   response jsonb;
   snapshot jsonb;
+  retry jsonb;
   row jsonb;
   source_revision bigint;
   cipher text := '$$E2E$${"version":2,"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}';
@@ -63,6 +64,23 @@ begin
      or (select vault_generation from public.quotes where id=quote_id) <> target_generation then raise exception 'activation was not atomic'; end if;
   snapshot := public.get_envelope_migration_snapshot((migration->>'migration_id')::uuid,admin_device,token);
   if snapshot->>'generation' <> target_generation::text or jsonb_array_length(snapshot->'quotes') <> 1 then raise exception 'maintenance snapshot was unavailable'; end if;
+  begin
+    perform public.get_envelope_migration_snapshot((migration->>'migration_id')::uuid,admin_device,'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB');
+    raise exception 'wrong-token maintenance snapshot was accepted';
+  exception when sqlstate '40001' then null;
+  end;
+  begin
+    update public.quotes set text='$$E2E$${"version":2,"iv":"AAAAAAAAAAAAAAAA","data":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="}' where id=quote_id;
+    perform public.finalize_envelope_migration((migration->>'migration_id')::uuid,admin_device,token);
+    raise exception 'tampered active target finalized';
+  exception when sqlstate '40001' then null;
+  end;
+  perform set_config('qv.migration_internal','on',true);
+  begin
+    update public.vault_devices set label='attacker mutation' where id=admin_device;
+    raise exception 'maintenance bypass was accepted';
+  exception when sqlstate '40001' then null;
+  end;
   if public.sync_quotes(target_generation, null, '[]'::jsonb, admin_device, token) is not null then raise exception 'maintenance permitted writes'; end if;
   perform public.rollback_envelope_migration((migration->>'migration_id')::uuid,admin_device,token);
   if (select envelope_status from public.vault_state where singleton) <> 'legacy'
@@ -70,6 +88,8 @@ begin
      or (select vault_generation from public.quotes where id=quote_id) <> source_generation
      or (select revision from public.vault_state where singleton) <> source_revision
      or (select prepared_generation is null and active_migration_id is null from public.vault_state where singleton) is not true then raise exception 'rollback did not exactly restore source'; end if;
+  retry := public.prepare_envelope_migration(source_generation,source_revision,admin_device,token,'88888888-8888-4888-8888-888888888888','{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
+  if retry is null then raise exception 'rollback prevented future migration'; end if;
   if has_table_privilege('authenticated','public.vault_migration_quote_copies','select') then raise exception 'migration copies were directly readable'; end if;
 end $test$;
 
