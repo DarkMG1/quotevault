@@ -133,8 +133,11 @@ const initial = { accountId: accountA, deviceId, publicKeyFingerprint: digest, p
 
 {
   const { device } = setup(() => null);
+  const vaultGate = loadModule('src/components/VaultGate.tsx', {}, { crypto: webcrypto, TextEncoder, TextDecoder, atob, btoa });
   await device.saveDeviceState({ ...initial, recoverySetupRequired: true });
   assert.equal((await device.loadDeviceState(accountA)).recoverySetupRequired, true, 'server-required recovery setup survives lock and reload');
+  assert.equal(vaultGate.vaultGateState({ recovery: device.needsRecoverySetup(await device.loadDeviceState(accountA)), device: true, key: true, leaseValid: true }), 'recovery-setup', 'a cleared-site passkey restore with server=true reaches recovery setup before quote UI');
+  assert.equal(device.needsRecoverySetup(initial), false);
   await assert.rejects(device.saveDeviceState({ ...initial, recoverySetupRequired: 'yes' }), /local state/i);
 }
 
