@@ -10,7 +10,7 @@ export function vaultGateState(input: { legacy?: boolean; pending?: boolean; rec
     if (input.legacy) return 'legacy-locked';
     if (input.pending) return 'pending-approval';
     if (input.recovery) return 'recovery-setup';
-    if (input.device && input.key && input.leaseValid === false) return 'lease-expired';
+    if (input.device && input.leaseValid === false) return 'lease-expired';
     if (input.device && input.key && input.leaseValid) return 'unlocked';
     return 'device-locked';
 }
@@ -27,11 +27,12 @@ export interface VaultGateProps {
     onCheckApproval?: () => void;
     onRecover?: (phrase: string, mode: 'remembered' | 'passkey-prf') => void;
     approvalUrl?: string; approvalCode?: string;
+    passkeyRestoreIds?: string[]; onFindPasskeyRestores?: () => void; onRestorePasskey?: (deviceId: string) => void;
     onRetry?: () => void;
     onSignOut?: () => void;
 }
 
-export function VaultGate({ state, busy, error, initializing, onLegacyUnlock, onRememberedUnlock, onPasskeyUnlock, onEnroll, onCheckApproval, onRecover, onRetry, onSignOut, approvalUrl, approvalCode }: VaultGateProps) {
+export function VaultGate({ state, busy, error, initializing, onLegacyUnlock, onRememberedUnlock, onPasskeyUnlock, onEnroll, onCheckApproval, onRecover, onRetry, onSignOut, approvalUrl, approvalCode, passkeyRestoreIds, onFindPasskeyRestores, onRestorePasskey }: VaultGateProps) {
     const legacy = state === 'legacy-locked';
     const expired = state === 'lease-expired';
     const pending = state === 'pending-approval';
@@ -57,6 +58,8 @@ export function VaultGate({ state, busy, error, initializing, onLegacyUnlock, on
                 {(expired || pending) && <button type="button" onClick={onCheckApproval} disabled={busy} className="w-full bg-primary-600 disabled:opacity-50 py-3 rounded-xl">{expired ? 'Renew authorization' : 'Check approval'}</button>}
                 {!pending && <><button type="button" onClick={onRememberedUnlock} disabled={busy} className="w-full bg-primary-600 disabled:opacity-50 py-3 rounded-xl">Unlock remembered device</button>
                     <button type="button" onClick={onPasskeyUnlock} disabled={busy} className="w-full border border-slate-600 py-3 rounded-xl">Unlock with passkey</button>
+                    <button type="button" onClick={onFindPasskeyRestores} disabled={busy} className="w-full text-sm text-primary-400">Restore cleared passkey device</button>
+                    {passkeyRestoreIds?.map(id => <button key={id} type="button" onClick={() => onRestorePasskey?.(id)} disabled={busy} className="w-full text-xs text-slate-300 border border-slate-700 py-2 rounded-xl">Restore {id}</button>)}
                     <button type="button" onClick={() => onEnroll?.('remembered')} disabled={busy} className="w-full text-sm text-primary-400">Remember this device</button>
                     <button type="button" onClick={() => onEnroll?.('passkey-prf')} disabled={busy} className="w-full text-sm text-primary-400">Set up a passkey device</button>
                 </>}

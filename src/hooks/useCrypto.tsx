@@ -1,19 +1,21 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { createVaultConfig, unlockWithVerifier } from '../lib/crypto';
-import { cacheVaultState, isLegacyVaultState, loadVaultState, parseLegacyVaultMutation, readCachedVaultState } from '../lib/vault';
+import { cacheVaultState, clearCachedVaultState, isLegacyVaultState, loadVaultState, parseLegacyVaultMutation, readCachedVaultState } from '../lib/vault';
 import type { VaultState } from '../lib/vault';
 import { supabase } from '../lib/supabase';
 import { useAuth } from './useAuth';
 import { isAdminUser } from '../lib/access';
 import { VaultGate, vaultGateState } from '../components/VaultGate';
-import { completeDevice, formatEnrollmentCode, getDeviceRequest, loadDeviceState, revokeOwnDevice } from '../lib/device';
-import { activateRecoveredDevice, beginRecovery, completeRecovery, createRecoveryKey, decryptDeviceBundle, prepareDeviceEnrollment, registerPasskey, renewDeviceLease, unlockPasskey } from '../lib/device-security';
+import { RecoverySetup } from '../components/RecoverySetup';
+import { formatEnrollmentCode, getDeviceRequest, loadDeviceState, revokeOwnDevice, saveDeviceState } from '../lib/device';
+import { activateRecoveredDevice, beginRecovery, completeRecovery, createRecoveryKey, decryptDeviceBundle, getPasskeyRestoreDevices, prepareDeviceEnrollment, registerPasskey, renewDeviceLease, renewThenCompleteDevice, unlockPasskey, webauthnChallenge } from '../lib/device-security';
 import { decryptPrivateBundle, deriveQuoteKey, deriveRecoveryBundleKey, encryptPrivateBundle, fingerprintPublicJwk, generateAuthorizationToken, generateWrappingKeyPair, unwrapVaultKey, wrapVaultKey } from '../lib/device-crypto';
 import { arrayBufferToBase64 } from '../lib/crypto';
 import { verifyDeviceLease } from '../lib/lease';
 import { clearLocalSyncState } from '../lib/sync';
 import { db } from '../lib/db';
+import { clearProfileCache } from '../lib/profile-cache';
 import type { DeviceLocalState } from '../types';
 
 interface CryptoContextType {
@@ -22,9 +24,10 @@ interface CryptoContextType {
     getDeviceAuthorization: () => Promise<{ deviceId: string; token: string }>;
     lockVault: () => void; forgetDevice: () => Promise<void>; approveDeviceRequest: (requestId: string, fingerprint: string, code: string) => Promise<void>;
     setupRecovery: (phrase: string, replace?: boolean) => Promise<void>; recoverDevice: (phrase: string, mode: 'remembered' | 'passkey-prf') => Promise<void>;
+    findPasskeyRestores: () => Promise<string[]>; restorePasskeyDevice: (deviceId: string) => Promise<void>;
 }
 const CryptoContext = createContext<CryptoContextType>({ encryptionKey: null, isLocked: true, vaultGeneration: null, legacyVaultGeneration: null, deviceId: null, leaseExpiresAt: null,
-    getDeviceAuthorization: async () => { throw new Error('Unlock an approved device first.'); }, lockVault: () => {}, forgetDevice: async () => {}, approveDeviceRequest: async () => {}, setupRecovery: async () => {}, recoverDevice: async () => {} });
+    getDeviceAuthorization: async () => { throw new Error('Unlock an approved device first.'); }, lockVault: () => {}, forgetDevice: async () => {}, approveDeviceRequest: async () => {}, setupRecovery: async () => {}, recoverDevice: async () => {}, findPasskeyRestores: async () => [], restorePasskeyDevice: async () => {} });
 const MAX_TIMEOUT = 0x7fffffff;
 
 export const CryptoProvider = ({ children }: { children: ReactNode }) => {
@@ -32,7 +35,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
     const [encryptionKey, setEncryptionKey] = useState<CryptoKey | null>(null);
     const [state, setState] = useState<VaultState | null>(() => user ? readCachedVaultState(user.id) : null);
     const stateRef = useRef(state); const [busy, setBusy] = useState(!state); const [error, setError] = useState('');
-    const [deviceState, setDeviceState] = useState<DeviceLocalState | null>(null); const [leaseExpiresAt, setLeaseExpiresAt] = useState<number | null>(null); const [leaseExpired, setLeaseExpired] = useState(false); const [pendingRequest, setPendingRequest] = useState<{ requestId: string; fingerprint: string; code: string } | null>(null);
+    const [deviceState, setDeviceState] = useState<DeviceLocalState | null>(null); const [leaseExpiresAt, setLeaseExpiresAt] = useState<number | null>(null); const [leaseExpired, setLeaseExpired] = useState(false); const [pendingRequest, setPendingRequest] = useState<{ requestId: string; fingerprint: string; code: string } | null>(null); const [passkeyRestores, setPasskeyRestores] = useState<string[]>([]); const [recoveryRequired, setRecoveryRequired] = useState(false);
     const request = useRef(0), unlockRequest = useRef(0), keyGeneration = useRef<string | null>(null);
     const masterKey = useRef<Uint8Array | null>(null);
     const userId = user?.id;
@@ -41,27 +44,27 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
         if (!userId) return; const version = ++request.current;
         try { const next = await loadVaultState(userId, !canSync); if (request.current !== version) return;
             if (stateRef.current?.generation !== next.generation) clearKeys(); stateRef.current = next; setState(next);
-            if (!isLegacyVaultState(next)) { const local = await loadDeviceState(userId); setDeviceState(local); setLeaseExpired(!!local?.lease && local.lease.claims[5] <= Date.now()); }
+            if (!isLegacyVaultState(next)) { const local = await loadDeviceState(userId); setDeviceState(local); setLeaseExpired(!!local?.lease && local.lease.claims[5] <= Date.now()); if (local && !local.wrapper && canSync && navigator.onLine) { try { const pending = await getDeviceRequest(local.deviceId); setPendingRequest({ requestId: pending.requestId, fingerprint: pending.enrollmentFingerprint, code: await formatEnrollmentCode(pending.enrollmentFingerprint) }); } catch { setPendingRequest(null); } } }
         } catch (cause) { if (request.current === version) { clearKeys(); stateRef.current = null; setState(null); setError(cause instanceof Error ? cause.message : 'Could not load vault settings.'); } }
         finally { if (request.current === version) setBusy(false); }
     }, [canSync, clearKeys, userId]);
     // Settings are external state; cancellation counters prevent stale writes.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    useEffect(() => { void refreshSettings(); return () => { request.current++; unlockRequest.current++; clearKeys(); }; }, [clearKeys, refreshSettings]);
+    useEffect(() => { const settingsRequest = request; const settingsUnlock = unlockRequest; void refreshSettings(); return () => { settingsRequest.current++; settingsUnlock.current++; clearKeys(); }; }, [clearKeys, refreshSettings]);
     const lockVault = useCallback((expired = false) => { unlockRequest.current++; clearKeys(); setLeaseExpired(expired); setError(''); if (isLegacyVaultState(stateRef.current)) { stateRef.current = null; setState(null); setBusy(true); void refreshSettings(); } }, [clearKeys, refreshSettings]);
     const validLease = useCallback((local: DeviceLocalState, generation: string, now = Date.now()) => local.lease ? verifyDeviceLease(local.lease, { now, deviceId: local.deviceId, accountId: local.accountId, generation, publicKeyFingerprint: local.publicKeyFingerprint }) : Promise.resolve(false), []);
     const unlockDevice = useCallback(async (mode: 'remembered' | 'passkey-prf') => {
         const vault = stateRef.current; if (!user || !vault || isLegacyVaultState(vault)) return;
         const version = ++unlockRequest.current; setBusy(true); setError('');
         try {
-            let local = await loadDeviceState(user.id); if (!local || local.protectionMode !== mode) throw new Error(mode === 'remembered' ? 'No remembered device is available in this browser.' : 'No passkey device is available in this browser.');
+            const stored = await loadDeviceState(user.id); if (!stored || stored.protectionMode !== mode) throw new Error(mode === 'remembered' ? 'No remembered device is available in this browser.' : 'No passkey device is available in this browser.'); let local: DeviceLocalState = stored; const newlyApproved = !local.wrapper;
             const bundleKey = mode === 'remembered' ? local.rememberedKey : await unlockPasskey(local.protection as never); if (!bundleKey) throw new Error('Remembered-device key is unavailable. Use recovery or approve a replacement device.');
             const bundle = await decryptDeviceBundle(local, bundleKey);
-            if (!local.wrapper) { if (!canSync || !navigator.onLine) throw new Error('This device is awaiting approval. Connect and try again after approval.'); local = await completeDevice(user.id, local.deviceId, bundle.authorizationToken, mode === 'remembered' ? local.rememberedKey : undefined, vault.generation); }
-            if (!await validLease(local, vault.generation)) { if (!canSync || !navigator.onLine) throw new Error('This device lease has expired. Connect to renew authorization.'); local = await renewDeviceLease({ accountId: user.id, deviceId: local.deviceId, token: bundle.authorizationToken, generation: vault.generation, publicKeyFingerprint: local.publicKeyFingerprint }); }
+            if (!local.wrapper) { if (!canSync || !navigator.onLine) throw new Error('This device is awaiting approval. Connect and try again after approval.'); local = await renewThenCompleteDevice({ accountId: user.id, deviceId: local.deviceId, token: bundle.authorizationToken, generation: vault.generation, publicKeyFingerprint: local.publicKeyFingerprint, rememberedKey: mode === 'remembered' ? local.rememberedKey : undefined }); }
+            else if (!await validLease(local, vault.generation)) { if (!canSync || !navigator.onLine) throw new Error('This device lease has expired. Connect to renew authorization.'); local = await renewDeviceLease({ accountId: user.id, deviceId: local.deviceId, token: bundle.authorizationToken, generation: vault.generation, publicKeyFingerprint: local.publicKeyFingerprint }); }
             if (!await validLease(local, vault.generation) || !local.wrapper || local.wrapper.generation !== vault.generation) throw new Error('Device authorization is invalid.');
             const opened = await unwrapVaultKey(local.wrapper.wrappedKey, bundle.privateKey, { vaultId: 'quotevault', generation: vault.generation, targetFingerprint: local.publicKeyFingerprint }); const quoteKey = await deriveQuoteKey(opened, vault.generation);
-            if (unlockRequest.current !== version) { opened.fill(0); return; } clearKeys(); masterKey.current = opened; keyGeneration.current = vault.generation; setDeviceState(local); setLeaseExpired(false); setLeaseExpiresAt(local.lease?.claims[5] ?? null); setEncryptionKey(quoteKey);
+            if (unlockRequest.current !== version) { opened.fill(0); return; } clearKeys(); masterKey.current = opened; keyGeneration.current = vault.generation; setDeviceState(local); setLeaseExpired(false); setLeaseExpiresAt(local.lease?.claims[5] ?? null); setRecoveryRequired(newlyApproved); setEncryptionKey(quoteKey);
         } catch (cause) { if (unlockRequest.current === version) setError(cause instanceof Error ? cause.message : 'Could not unlock this device.'); }
         finally { if (unlockRequest.current === version) setBusy(false); }
     }, [canSync, clearKeys, user, validLease]);
@@ -95,8 +98,8 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
         return { deviceId: local.deviceId, token: bundle.authorizationToken };
     }, [encryptionKey, user]);
     const forgetDevice = useCallback(async () => {
-        const local = deviceState; if (local?.protectionMode === 'passkey-prf' && (!canSync || !navigator.onLine)) throw new Error('Connect before forgetting a passkey device.'); if (local && canSync && navigator.onLine) { const auth = await getDeviceAuthorization(); await revokeOwnDevice(local.deviceId, auth.token); }
-        await clearLocalSyncState(); await db.deviceState.clear(); if (user) try { localStorage.removeItem(`quotevault:settings:${user.id}`); } catch { /* storage may be disabled */ }
+        const local = deviceState; if (local && canSync && navigator.onLine) { const auth = await getDeviceAuthorization(); await revokeOwnDevice(local.deviceId, auth.token); }
+        await clearLocalSyncState(); await db.deviceState.clear(); if (user) { clearCachedVaultState(user.id); clearProfileCache(user.id); }
         if ('caches' in window) await Promise.all((await caches.keys()).map(name => caches.delete(name))); setDeviceState(null); lockVault();
     }, [canSync, deviceState, getDeviceAuthorization, lockVault, user]);
     const approveDeviceRequest = useCallback(async (requestId: string, fingerprint: string, code: string) => {
@@ -117,15 +120,25 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
         if (!user || !canSync || !navigator.onLine) throw new Error('Connect to use personal recovery.');
         const recovery = await beginRecovery(); const key = await deriveRecoveryBundleKey(phrase, recovery.kdf); const bundle = await decryptPrivateBundle(recovery.encryptedPrivateKey, key, { accountId: user.id, recordId: recovery.recoveryKeyId, publicKeyFingerprint: recovery.publicKeyFingerprint, protectionMode: 'recovery', version: 1, recoveryKdf: recovery.kdf }); const privateKey = await crypto.subtle.importKey('jwk', bundle.privateJwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['decrypt']);
         const responseBytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, privateKey, Uint8Array.from(atob(recovery.ciphertext.replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0)))); const response = arrayBufferToBase64(responseBytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); responseBytes.fill(0);
-        const completed = await completeRecovery({ challengeId: recovery.challengeId, response }); const master = await unwrapVaultKey(completed.wrappedKey, privateKey, { vaultId: 'quotevault', generation: completed.generation, targetFingerprint: recovery.publicKeyFingerprint });
-        try { const passkey = mode === 'passkey-prf' ? await registerPasskey({ userId: user.id, userName: user.email ?? user.id, displayName: user.user_metadata?.first_name ?? 'QuoteVault member' }) : undefined; const { key: passkeyKey, ...protection } = passkey ?? {}; const enrollment = await prepareDeviceEnrollment({ accountId: user.id, label: navigator.userAgent.slice(0, 100) || 'Recovered browser', requestKind: 'recovery', protectionMode: mode, protection: mode === 'remembered' ? { version: 1, mode: 'remembered' } : protection, encryptionKey: passkeyKey }); const request = await getDeviceRequest(enrollment.deviceId); const publicKey = await crypto.subtle.importKey('jwk', request.publicJwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt']); const wrappedKey = await wrapVaultKey({ version: 1, vaultId: 'quotevault', generation: completed.generation, targetFingerprint: request.publicKeyFingerprint, masterKey: master }, publicKey); await activateRecoveredDevice({ challengeId: recovery.challengeId, transitionToken: completed.transitionToken, requestId: enrollment.deviceId, enrollmentFingerprint: request.enrollmentFingerprint, generation: completed.generation, wrappedKey }); await completeDevice(user.id, enrollment.deviceId, enrollment.authorizationToken, enrollment.rememberedKey, completed.generation); setDeviceState(await loadDeviceState(user.id)); }
+        const completed = await completeRecovery({ challengeId: recovery.challengeId, recoveryKeyId: recovery.recoveryKeyId, response }); const master = await unwrapVaultKey(completed.wrappedKey, privateKey, { vaultId: 'quotevault', generation: completed.generation, targetFingerprint: recovery.publicKeyFingerprint });
+        try { const passkey = mode === 'passkey-prf' ? await registerPasskey({ userId: user.id, userName: user.email ?? user.id, displayName: user.user_metadata?.first_name ?? 'QuoteVault member' }) : undefined; const { key: passkeyKey, ...protection } = passkey ?? {}; const enrollment = await prepareDeviceEnrollment({ accountId: user.id, label: navigator.userAgent.slice(0, 100) || 'Recovered browser', requestKind: 'recovery', protectionMode: mode, protection: mode === 'remembered' ? { version: 1, mode: 'remembered' } : protection, encryptionKey: passkeyKey }); const request = await getDeviceRequest(enrollment.deviceId); const publicKey = await crypto.subtle.importKey('jwk', request.publicJwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt']); const wrappedKey = await wrapVaultKey({ version: 1, vaultId: 'quotevault', generation: completed.generation, targetFingerprint: request.publicKeyFingerprint, masterKey: master }, publicKey); await activateRecoveredDevice({ challengeId: recovery.challengeId, transitionToken: completed.transitionToken, requestId: enrollment.deviceId, enrollmentFingerprint: request.enrollmentFingerprint, generation: completed.generation, wrappedKey }); const pending = await loadDeviceState(user.id); if (!pending) throw new Error('Recovered device state is missing.'); await renewThenCompleteDevice({ accountId: user.id, deviceId: enrollment.deviceId, token: enrollment.authorizationToken, generation: completed.generation, publicKeyFingerprint: pending.publicKeyFingerprint, rememberedKey: enrollment.rememberedKey }); setDeviceState(await loadDeviceState(user.id)); }
         finally { master.fill(0); }
     }, [canSync, user]);
+    const findPasskeyRestores = useCallback(async () => (await getPasskeyRestoreDevices()).map(device => device.deviceId), []);
+    const restorePasskeyDevice = useCallback(async (deviceId: string) => {
+        if (!user || !canSync || !navigator.onLine) throw new Error('Connect to restore a passkey device.');
+        const candidate = (await getPasskeyRestoreDevices()).find(device => device.deviceId === deviceId); if (!candidate) throw new Error('That passkey device is no longer available.');
+        const key = await unlockPasskey(candidate.protection, await webauthnChallenge('restoration'));
+        const local: DeviceLocalState = { accountId: user.id, deviceId: candidate.deviceId, publicKeyFingerprint: candidate.publicKeyFingerprint, protectionMode: 'passkey-prf', protection: candidate.protection as unknown as Record<string, unknown>, encryptedPrivateBundle: candidate.encryptedPrivateBundle };
+        await saveDeviceState(local); const bundle = await decryptDeviceBundle(local, key);
+        await renewThenCompleteDevice({ accountId: user.id, deviceId: local.deviceId, token: bundle.authorizationToken, generation: candidate.generation, publicKeyFingerprint: local.publicKeyFingerprint }); setDeviceState(await loadDeviceState(user.id)); setPendingRequest(null); await unlockDevice('passkey-prf');
+    }, [canSync, unlockDevice, user]);
     if (!user) return children;
+    if (encryptionKey && recoveryRequired) return <RecoverySetup onComplete={async phrase => { await setupRecovery(phrase); setRecoveryRequired(false); }} />;
     if (!encryptionKey) { const legacy = isLegacyVaultState(state); const pending = !legacy && !!deviceState && !deviceState.wrapper; const gate = vaultGateState({ legacy, pending, device: !legacy, key: false, leaseValid: !leaseExpired });
         const approvalUrl = pendingRequest ? `https://quotes.darkmg1.dev/#approve?request=${pendingRequest.requestId}&fingerprint=${encodeURIComponent(pendingRequest.fingerprint)}` : undefined;
-        return <VaultGate state={gate as Exclude<typeof gate, 'unlocked'>} busy={busy} error={error} initializing={legacy && !state?.verifier} approvalUrl={approvalUrl} approvalCode={pendingRequest?.code} onLegacyUnlock={handleLegacyUnlock} onRememberedUnlock={() => void unlockDevice('remembered')} onPasskeyUnlock={() => void unlockDevice('passkey-prf')} onEnroll={mode => void enroll(mode)} onCheckApproval={() => void unlockDevice(deviceState?.protectionMode ?? 'remembered')} onRecover={(phrase, mode) => { void recoverDevice(phrase, mode).then(() => unlockDevice(mode)).catch(cause => setError(cause instanceof Error ? cause.message : 'Recovery failed.')); }} onRetry={() => void refreshSettings()} onSignOut={() => void signOut()} />;
+        return <VaultGate state={gate as Exclude<typeof gate, 'unlocked'>} busy={busy} error={error} initializing={legacy && !state?.verifier} approvalUrl={approvalUrl} approvalCode={pendingRequest?.code} passkeyRestoreIds={passkeyRestores} onFindPasskeyRestores={() => { void findPasskeyRestores().then(setPasskeyRestores).catch(cause => setError(cause instanceof Error ? cause.message : 'Could not find passkey devices.')); }} onRestorePasskey={id => { void restorePasskeyDevice(id).then(() => setPasskeyRestores([])).catch(cause => setError(cause instanceof Error ? cause.message : 'Could not restore passkey device.')); }} onLegacyUnlock={handleLegacyUnlock} onRememberedUnlock={() => void unlockDevice('remembered')} onPasskeyUnlock={() => void unlockDevice('passkey-prf')} onEnroll={mode => void enroll(mode)} onCheckApproval={() => void unlockDevice(deviceState?.protectionMode ?? 'remembered')} onRecover={(phrase, mode) => { void recoverDevice(phrase, mode).then(() => unlockDevice(mode)).catch(cause => setError(cause instanceof Error ? cause.message : 'Recovery failed.')); }} onRetry={() => void refreshSettings()} onSignOut={() => void signOut()} />;
     }
-    return <CryptoContext.Provider value={{ encryptionKey, isLocked: false, vaultGeneration: state?.generation ?? null, legacyVaultGeneration: isLegacyVaultState(state) ? state.legacy_generation : null, deviceId: deviceState?.deviceId ?? null, leaseExpiresAt, getDeviceAuthorization, lockVault, forgetDevice, approveDeviceRequest, setupRecovery, recoverDevice }}>{children}</CryptoContext.Provider>;
+    return <CryptoContext.Provider value={{ encryptionKey, isLocked: false, vaultGeneration: state?.generation ?? null, legacyVaultGeneration: isLegacyVaultState(state) ? state.legacy_generation : null, deviceId: deviceState?.deviceId ?? null, leaseExpiresAt, getDeviceAuthorization, lockVault, forgetDevice, approveDeviceRequest, setupRecovery, recoverDevice, findPasskeyRestores, restorePasskeyDevice }}>{children}</CryptoContext.Provider>;
 };
 export const useCrypto = () => useContext(CryptoContext);

@@ -332,5 +332,6 @@ assert.equal(vaultGate.vaultGateState({ pending: true }), 'pending-approval');
 assert.equal(vaultGate.vaultGateState({ recovery: true }), 'recovery-setup');
 assert.equal(vaultGate.vaultGateState({ device: true, key: false }), 'device-locked');
 assert.equal(vaultGate.vaultGateState({ device: true, key: true, leaseValid: false }), 'lease-expired');
+assert.equal(vaultGate.vaultGateState({ device: true, key: false, leaseValid: false }), 'lease-expired', 'expiry remains visible after locking clears the quote key');
 assert.equal(vaultGate.vaultGateState({ device: true, key: true, leaseValid: true }), 'unlocked');
 assert.equal(vaultGate.vaultGateState({ device: true, key: true, leaseValid: true }) === 'unlocked', true, 'children render only after a verified lease derives the quote key');

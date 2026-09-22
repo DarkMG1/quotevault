@@ -18,6 +18,7 @@ function setup({ rpcReply = () => null, edgeReply = () => null, navigatorValue =
     async saveDeviceState(value) { states.set(value.accountId, structuredClone(value)); },
     async loadDeviceState(id) { return structuredClone(states.get(id) ?? null); },
     async requestDevice(input) { calls.push(['request_device', input]); return { requestId: input.deviceId, deviceId: input.deviceId, enrollmentFingerprint: fingerprint, expiresAt: '2030-01-01T00:00:00.000Z' }; },
+    async completeDevice(...input) { calls.push(['complete_device', input]); return structuredClone(states.get(input[0])); },
   };
   const api = loadModule('src/lib/device-security.ts', {
     './device': device,
@@ -30,7 +31,7 @@ function setup({ rpcReply = () => null, edgeReply = () => null, navigatorValue =
       decryptPrivateBundle: decryptBundle ?? (async () => ({ version: 1, privateJwk: { kty: 'RSA' }, authorizationToken: token })),
     },
     './lease': { verifyDeviceLease: async () => true },
-    './supabase': { supabase: { rpc: async (name, args) => ({ data: rpcReply(name, args), error: null }), functions: { invoke: async (name, input) => ({ data: edgeReply(name, input), error: null }) } } },
+    './supabase': { supabase: { rpc: async (name, args) => ({ data: rpcReply(name, args), error: null }), functions: { invoke: async (name, input) => { calls.push(['renew', input]); return { data: edgeReply(name, input), error: null }; } } } },
     './crypto': { arrayBufferToBase64: value => Buffer.from(value).toString('base64'), base64ToArrayBuffer: value => Uint8Array.from(Buffer.from(value, 'base64')).buffer },
   }, { crypto: webcrypto, TextEncoder, TextDecoder, atob, btoa, structuredClone, navigator: navigatorValue });
   return { api, states, calls };
@@ -54,6 +55,14 @@ test('lease renewal verifies and caches only the signed matching lease', async (
   const invalid = setup({ edgeReply: () => ({ ...lease, signature: 'not base64' }) });
   invalid.states.set(accountId, { accountId, deviceId, publicKeyFingerprint: fingerprint, protectionMode: 'remembered', protection: { version: 1, mode: 'remembered' }, encryptedPrivateBundle: bundle });
   await assert.rejects(invalid.api.renewDeviceLease({ accountId, deviceId, token, generation, publicKeyFingerprint: fingerprint, now: 1 }), /Invalid device/i);
+});
+
+test('approval completion renews and verifies its lease before fetching the wrapper', async () => {
+  const lease = { version: 1, claims: [1, deviceId, accountId, generation, 1, 2, fingerprint], signature: 'AA==' };
+  const { api, states, calls } = setup({ edgeReply: () => lease });
+  states.set(accountId, { accountId, deviceId, publicKeyFingerprint: fingerprint, protectionMode: 'remembered', protection: { version: 1, mode: 'remembered' }, encryptedPrivateBundle: bundle });
+  await api.renewThenCompleteDevice({ accountId, deviceId, token, generation, publicKeyFingerprint: fingerprint });
+  assert.deepEqual(calls.filter(([name]) => name === 'renew' || name === 'complete_device').map(([name]) => name), ['renew', 'complete_device']);
 });
 
 test('passkey unlock requires a PRF result and accepts a local challenge offline', async () => {
@@ -89,7 +98,8 @@ test('recovery contracts bind IDs and reject malformed secret-bearing responses'
   const begin = { challengeId: deviceId, recoveryKeyId: accountId, publicKeyFingerprint: fingerprint, ciphertext: 'A'.repeat(512), encryptedPrivateKey: bundle, kdf: { version: 1, salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600000 } };
   const { api } = setup({ edgeReply: () => begin, rpcReply: name => name === 'complete_recovery' ? { recovery_key_id: accountId, generation, wrapped_key: 'A'.repeat(512), transition_token: token } : { device_id: deviceId, generation } });
   assert.equal((await api.beginRecovery()).recoveryKeyId, accountId);
-  assert.equal((await api.completeRecovery({ challengeId: deviceId, response: token })).generation, generation);
+  assert.equal((await api.completeRecovery({ challengeId: deviceId, recoveryKeyId: accountId, response: token })).generation, generation);
+  await assert.rejects(api.completeRecovery({ challengeId: deviceId, recoveryKeyId: deviceId, response: token }), /recovery/i);
   assert.equal((await api.activateRecoveredDevice({ challengeId: deviceId, transitionToken: token, requestId: deviceId, enrollmentFingerprint: fingerprint, generation, wrappedKey: 'A'.repeat(512) })).deviceId, deviceId);
   await assert.rejects(setup({ edgeReply: () => ({ ...begin, token: token }) }).api.beginRecovery(), /recovery/i);
 });
