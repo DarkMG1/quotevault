@@ -103,6 +103,12 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
         }
     };
 
+    const authorParts = author.split(' & ');
+    const toggleAuthor = (name: string, checked: boolean) => setAuthor((current) => {
+        const parts = current.split(' & ');
+        return checked ? (parts.includes(name) ? current : [...parts.filter(Boolean), name].join(' & ')) : parts.filter(part => part !== name).join(' & ');
+    });
+
     return (
         <dialog
             ref={dialogRef}
@@ -129,16 +135,21 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
                 </div>
 
                 <div>
-                    <label htmlFor="quote-author" className="block text-sm font-medium text-slate-300 mb-1">Author</label>
                     {profileError && <div role="alert" className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300"><span>{profileError}</span><button type="button" onClick={() => setProfileRetry((value) => value + 1)} className="font-medium text-red-200 underline">Retry</button></div>}
                     {edit && <datalist id="quote-author-options">{profiles.map(profile => <option key={profile.id || authorLabel(profile)} value={authorLabel(profile)} />)}</datalist>}
-                    {edit ? <input id="quote-author" list="quote-author-options" required value={author} onChange={e => setAuthor(e.target.value)} className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-primary-500" /> : <select id="quote-author" required disabled={isLoadingProfiles} value={author} onChange={(e) => setAuthor(e.target.value)} className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all appearance-none disabled:opacity-60">
-                        <option value="" disabled>{isLoadingProfiles ? 'Loading authors…' : 'Select an Author'}</option>
-                        {profiles.map((profile) => {
-                            const displayName = authorLabel(profile);
-                            return <option key={profile.id ?? displayName} value={displayName}>{displayName}</option>;
-                        })}
-                    </select>}
+                    {edit && <><label htmlFor="quote-author" className="block text-sm font-medium text-slate-300 mb-1">Author</label><input id="quote-author" list="quote-author-options" required value={author} onChange={e => setAuthor(e.target.value)} className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-primary-500" /></>}
+                    <fieldset disabled={isLoadingProfiles} className="mt-2">
+                        <legend className="block text-sm font-medium text-slate-300 mb-1">{edit ? 'Add profile authors' : 'Author'}</legend>
+                        <p className="mb-2 text-sm text-slate-400">Choose one or more people.</p>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            {profiles.map((profile) => {
+                                const displayName = authorLabel(profile);
+                                const selected = authorParts.includes(displayName);
+                                return <label key={profile.id ?? displayName} className="flex min-h-11 items-center gap-3 rounded-xl border border-slate-700 bg-slate-800/50 px-3 py-2 text-white disabled:opacity-60"><input type="checkbox" checked={selected} disabled={selected && authorParts.length === 1} onChange={event => toggleAuthor(displayName, event.target.checked)} />{displayName}</label>;
+                            })}
+                        </div>
+                        {!isLoadingProfiles && !profiles.length && <p className="text-sm text-slate-400">No authors are available.</p>}
+                    </fieldset>
                 </div>
 
                 <div>

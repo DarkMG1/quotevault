@@ -113,6 +113,71 @@ test('matching imported authors preserves directed provenance and unknown compou
   expect(await storedPayload(page, compound)).toMatchObject({ payload: compoundBefore.payload });
 });
 
+test('add and edit keep multiple selected authors, text, and the original sender', async ({ page }) => {
+  const text = 'A browser regression quote with two authors.';
+  await enterVault(page);
+  await page.getByRole('button', { name: 'Add quote', exact: true }).click();
+  const add = page.getByRole('dialog', { name: 'Add Quote', exact: true });
+  await add.getByLabel('Quote', { exact: true }).fill(text);
+  await add.getByLabel(/Context/).fill('Two author browser context');
+  await add.getByLabel(/Date Said/).fill('2026-09-21');
+  await expect(add.getByRole('checkbox', { name: 'Demo Tester', exact: true })).toBeChecked();
+  await add.getByRole('checkbox', { name: 'Morgan Lee', exact: true }).check();
+  await add.getByRole('button', { name: 'Save Quote', exact: true }).click();
+  await expect(add).not.toBeVisible();
+  await expect(page.locator('blockquote').filter({ hasText: text })).toBeVisible();
+  await page.getByLabel('Search quotes or authors').fill('Morgan Lee');
+  await expect(page.locator('blockquote').filter({ hasText: text })).toBeVisible();
+  await page.getByLabel('Search quotes or authors').fill('Demo Tester');
+  await expect(page.locator('blockquote').filter({ hasText: text })).toBeVisible();
+  const search = page.getByLabel('Search quotes or authors');
+  await search.fill('authors:"Morgan Lee" content:"two authors" context:"browser context" date-range:2026-09-21..2026-09-21');
+  await expect(page.locator('blockquote').filter({ hasText: text })).toBeVisible();
+  await expect(page.locator('blockquote').filter({ hasText: 'A locally generated test quote.' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Search filters', exact: true }).click();
+  expect(await page.locator('#search-author-options option').evaluateAll(options => options.map(option => option.getAttribute('value')))).toContain('Morgan Lee');
+  await expect(page.getByLabel('Author contains')).toHaveValue('Morgan Lee');
+  await expect(page.getByLabel('Start date')).toHaveValue('2026-09-21');
+  await expect(page.getByLabel('End date')).toHaveValue('2026-09-21');
+  await search.fill('');
+  await expect(page.getByLabel('Start date')).toHaveValue('');
+  await expect(page.getByLabel('End date')).toHaveValue('');
+  await page.getByLabel('Start date').fill('2026-09-21');
+  await page.getByLabel('End date').fill('2026-09-21');
+  await expect(page.locator('blockquote').filter({ hasText: text })).toBeVisible();
+  await search.fill('date-range:2026-09-22..2026-09-20');
+  await expect(page.getByRole('alert')).toContainText('Date range');
+  await expect(page.locator('blockquote')).toHaveCount(0);
+  await search.fill('');
+  await page.reload();
+  await page.getByLabel('Group Vault Key').fill('demo-vault-key');
+  await page.getByRole('button', { name: 'Unlock Vault', exact: true }).click();
+
+  await page.getByRole('button', { name: 'Edit quote by Demo Tester & Morgan Lee', exact: true }).click();
+  const edit = page.getByRole('dialog', { name: 'Edit Quote', exact: true });
+  await expect(edit.getByLabel('Quote', { exact: true })).toHaveValue(text);
+  await expect(edit.getByLabel('Author', { exact: true })).toHaveValue('Demo Tester & Morgan Lee');
+  await expect(edit.getByRole('checkbox', { name: 'Demo Tester', exact: true })).toBeChecked();
+  await expect(edit.getByRole('checkbox', { name: 'Morgan Lee', exact: true })).toBeChecked();
+  await edit.getByRole('checkbox', { name: 'Morgan Lee', exact: true }).uncheck();
+  await expect(edit.getByLabel('Author', { exact: true })).toHaveValue('Demo Tester');
+  await edit.getByRole('button', { name: 'Save Changes', exact: true }).click();
+  await expect(edit).not.toBeVisible();
+  await expect(page.locator('blockquote').filter({ hasText: text })).toBeVisible();
+  await expect(page.locator('blockquote').filter({ hasText: text }).locator('..').getByText('Originally shared by Demo Tester', { exact: true })).toBeVisible();
+
+  await page.locator('blockquote').filter({ hasText: text }).locator('..').getByRole('button', { name: 'Edit quote by Demo Tester', exact: true }).click();
+  const reopened = page.getByRole('dialog', { name: 'Edit Quote', exact: true });
+  await expect(reopened.getByLabel('Quote', { exact: true })).toHaveValue(text);
+  await expect(reopened.getByRole('checkbox', { name: 'Morgan Lee', exact: true })).not.toBeChecked();
+  await reopened.getByRole('checkbox', { name: 'Morgan Lee', exact: true }).check();
+  await expect(reopened.getByLabel('Author', { exact: true })).toHaveValue('Demo Tester & Morgan Lee');
+  await reopened.getByRole('button', { name: 'Save Changes', exact: true }).click();
+  await expect(reopened).not.toBeVisible();
+  await expect(page.locator('blockquote').filter({ hasText: text })).toBeVisible();
+  await expect(page.locator('blockquote').filter({ hasText: text }).locator('..').getByText('Originally shared by Demo Tester', { exact: true })).toBeVisible();
+});
+
 test('a non-administrator cannot start an edit', async ({ page }) => {
   await enterVault(page, 'syntheticmember@example.invalid');
   await expect(page.getByRole('button', { name: /^Edit quote by / })).toHaveCount(0);

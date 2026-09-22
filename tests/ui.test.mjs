@@ -104,6 +104,56 @@ assert.equal(find(addQuoteTree, node => node.type === 'textarea')?.props?.id, 'q
 assert.equal(find(addQuoteTree, node => node.type === 'label' && node.props.htmlFor === 'quote-text') !== null, true);
 assert.equal(find(addQuoteTree, node => node.type === 'input' && node.props.id === 'quote-source-sender') !== null, false);
 
+async function renderWithProfiles(edit) {
+  const states = [];
+  let stateCursor = 0;
+  let effectCursor = 0;
+  const effects = [];
+  const profiles = [{ id: 'ada', first_name: 'Ada', last_name: 'Lovelace' }, { id: 'grace', first_name: 'Grace', last_name: 'Hopper' }];
+  const profileComponents = load('src/components/AddQuote.tsx', {
+    react: {
+      useState: initial => {
+        const index = stateCursor++;
+        if (!(index in states)) states[index] = initial;
+        return [states[index], value => { states[index] = typeof value === 'function' ? value(states[index]) : value; }];
+      },
+      useEffect: effect => { const index = effectCursor++; if (!effects[index]) { effects[index] = true; effect(); } },
+      useRef: initial => ({ current: initial }),
+    },
+    'framer-motion': { AnimatePresence: 'div', motion: new Proxy({}, { get: (_, key) => key }) },
+    'lucide-react': new Proxy({}, { get: (_, key) => key }),
+    '../hooks/useQuotes': { useQuotes: () => ({ addQuote: async () => {} }) },
+    '../hooks/useAuth': { useAuth: () => ({ user: { id: 'user-a' } }) },
+    '../hooks/useCrypto': { useCrypto: () => ({ encryptionKey: {}, isLocked: false }) },
+    '../lib/crypto': { encryptData: async () => ({}) },
+    '../lib/profile-cache': { loadProfiles: async () => profiles },
+    '../lib/quote-edit': { saveQuoteEdit: async () => {} },
+    '../lib/access': { isAdminUser: () => false },
+    './ui': ui,
+  });
+  const render = () => { stateCursor = 0; effectCursor = 0; return profileComponents.AddQuote({ onClose: () => {}, edit }); };
+  render();
+  await Promise.resolve();
+  await Promise.resolve();
+  return { render, states };
+}
+
+const multiAuthor = await renderWithProfiles();
+let multiAuthorTree = multiAuthor.render();
+assert.equal(find(multiAuthorTree, node => node.type === 'legend')?.props?.children, 'Author');
+assert.equal(find(multiAuthorTree, node => node.type === 'input' && node.props.type === 'checkbox' && node.props.checked === true && node.props.disabled === true) !== null, true);
+find(multiAuthorTree, node => node.type === 'input' && node.props.type === 'checkbox' && node.props.checked === false).props.onChange({ target: { checked: true } });
+multiAuthorTree = multiAuthor.render();
+assert.equal(multiAuthor.states[1], 'Ada Lovelace & Grace Hopper');
+
+const importedAuthor = await renderWithProfiles({ display: { text: '', author: 'Mystery & Outside Speaker', context: '' }, stored: { quote_date: '' } });
+let importedTree = importedAuthor.render();
+find(importedTree, node => node.type === 'input' && node.props.type === 'checkbox' && node.props.checked === false).props.onChange({ target: { checked: true } });
+importedTree = importedAuthor.render();
+assert.equal(importedAuthor.states[1], 'Mystery & Outside Speaker & Ada Lovelace');
+find(importedTree, node => node.type === 'input' && node.props.type === 'checkbox' && node.props.checked === true).props.onChange({ target: { checked: false } });
+assert.equal(importedAuthor.states[1], 'Mystery & Outside Speaker');
+
 const encryptedInputs = [];
 const submittedQuotes = [];
 let addQuoteState = 0;

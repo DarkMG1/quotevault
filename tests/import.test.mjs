@@ -28,6 +28,8 @@ assert.throws(() => importer.parseImportFile(file(Array(501).fill(raw))), /500/)
 assert.equal(importer.checkImports(rows, [{text: ' synthetic  PRIVATE words ', author: 'ADA'}])[0].duplicate, true);
 assert.equal(importer.checkImports(rows, [{text: 'User changed the wording', author: 'Different', import_source_id: 'a'.repeat(64)}])[0].duplicate, true);
 assert.equal(importer.checkImports([...rows, ...rows], [])[1].duplicate, true);
+assert.equal(importer.checkImports([{...rows[0], author: 'Ada & Grace'}], [{text: raw.text, author: 'Grace & Ada'}])[0].duplicate, true);
+assert.equal(importer.checkImports([{...rows[0], author: 'Ada & Grace'}], [{text: raw.text, author: 'Ada & Someone else'}])[0].duplicate, false);
 assert.ok(importer.checkImports(rows, [{text: raw.text, author: 'Different person'}])[0].similar);
 const encrypted = await crypt.encryptData(JSON.stringify({text: 'Existing', author: 'Ada'}), key);
 handler = async () => ({ data: { generation: context.generation, revision: 3, quotes: [{ vault_generation: context.generation, text: '$$E2E$$' + JSON.stringify(encrypted) }] } });

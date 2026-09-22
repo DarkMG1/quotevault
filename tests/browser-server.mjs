@@ -106,7 +106,10 @@ http.createServer(async (req, res) => {
       revision += edits.length;
       response = { updated: edits.length };
     }
-  } else if (path === '/rest/v1/profiles') response = [{ id: user.id, first_name: 'Demo', last_name: 'Tester' }];
+  } else if (path === '/rest/v1/profiles') response = [
+    { id: user.id, first_name: 'Demo', last_name: 'Tester' },
+    { id: '77777777-7777-4777-8777-777777777777', first_name: 'Morgan', last_name: 'Lee' },
+  ];
   else if (path === '/rest/v1/allowlist') response = [{ id: user.id, email: user.email }];
   else if (path === '/stats') response = calls;
   // Test-only inspection endpoint. It returns only the stored row; browser specs decrypt it themselves.

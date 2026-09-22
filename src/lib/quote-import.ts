@@ -69,7 +69,8 @@ export function parseImportFile(text: string): ImportRow[] {
 
 export const normalizeQuote = (value: string) => value.normalize('NFKC').toLowerCase().replace(/[’‘]/g, "'")
     .replace(/[“”]/g, '"').replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
-const contentKey = (row: ExistingQuote) => JSON.stringify([normalizeQuote(row.text), normalizeQuote(row.author)]);
+const contentKey = (row: ExistingQuote) => JSON.stringify([normalizeQuote(row.text),
+    [...new Set(normalizeQuote(row.author).split(/\s+&\s+/))].sort()]);
 
 export function checkImports(rows: ImportRow[], existing: ExistingQuote[]): ImportCheck[] {
     const seen = [...existing];
