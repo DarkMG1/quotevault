@@ -12,7 +12,7 @@ function setup() {
   const network = { result: { data: state, error: null } };
   const exports = loadModule('src/lib/vault.ts', {
     './supabase': { supabase: { rpc: async name => {
-      assert.equal(name, 'get_vault_state'); calls++; return network.result;
+      assert.equal(name, 'get_vault_bootstrap_state'); calls++; return network.result;
     } } },
   }, { navigator, atob, localStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) } });
   return { ...exports, navigator, network, calls: () => calls, stored };

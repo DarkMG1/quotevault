@@ -29,7 +29,7 @@ const activeIdentityKey = 'sync-active-identity';
 
 export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
     const { user, canSync, retry: retrySession } = useAuth();
-    const { encryptionKey, vaultGeneration, legacyVaultGeneration, lockVault } = useCrypto();
+    const { encryptionKey, vaultGeneration, legacyVaultGeneration, lockVault, getDeviceAuthorization, renewDeviceLease } = useCrypto();
     const [initializedIdentity, setInitializedIdentity] = useState<string | null>(null);
     const [lastSync, setLastSync] = useState<{ identity: string; at: string } | null>(null);
     const [syncError, setSyncError] = useState('');
@@ -40,8 +40,10 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
     const actorId = user?.id;
     const generation = vaultGeneration;
     const context = useMemo<SyncContext | null>(() => actorId && generation ? {
-        actorId, generation, legacyGeneration: legacyVaultGeneration, onGenerationMismatch: lockVault
-    } : null, [actorId, generation, legacyVaultGeneration, lockVault]);
+        actorId, generation, legacyGeneration: legacyVaultGeneration, onGenerationMismatch: lockVault,
+        getDeviceAuthorization: deviceId ? getDeviceAuthorization : undefined,
+        renewLease: deviceId ? renewDeviceLease : undefined,
+    } : null, [actorId, generation, legacyVaultGeneration, lockVault, getDeviceAuthorization, renewDeviceLease, deviceId]);
     const identity = context && `${context.actorId}:${context.generation}`;
     const ready = initializedIdentity === identity;
     const loading = !ready;
@@ -184,7 +186,6 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
         const online = () => schedule();
         const visible = () => { if (document.visibilityState === 'visible') schedule(); };
         const channel = supabase.channel('quotevault-sync', { config: { private: true } })
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'quotes' }, schedule)
             .on('broadcast', { event: 'vault-generation' }, schedule)
             .subscribe(status => { if (status === 'SUBSCRIBED') schedule(); });
         window.addEventListener('online', online);

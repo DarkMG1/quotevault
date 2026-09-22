@@ -10,7 +10,7 @@ import { authorName, matchAuthor, matchedAuthorContext } from '../lib/quote-auth
 
 export function ImportQuotes({ onClose }: { onClose: () => void }) {
     const { user, canSync } = useAuth();
-    const { encryptionKey, vaultGeneration, lockVault } = useCrypto();
+    const { encryptionKey, vaultGeneration, lockVault, getDeviceAuthorization, renewDeviceLease, deviceId } = useCrypto();
     const { refresh } = useQuotes();
     const [rows, setRows] = useState<ImportRow[]>([]);
     const [snapshot, setSnapshot] = useState<ImportSnapshot | null>(null);
@@ -25,8 +25,9 @@ export function ImportQuotes({ onClose }: { onClose: () => void }) {
     const lifecycle = useRef(0);
     const running = useRef(false);
     const actorId = user?.id;
-    const context = useMemo(() => actorId && vaultGeneration ? { actorId, generation: vaultGeneration, onGenerationMismatch: lockVault } : null,
-        [actorId, vaultGeneration, lockVault]);
+    const context = useMemo(() => actorId && vaultGeneration ? { actorId, generation: vaultGeneration, onGenerationMismatch: lockVault,
+        getDeviceAuthorization: deviceId ? getDeviceAuthorization : undefined, renewLease: deviceId ? renewDeviceLease : undefined } : null,
+        [actorId, vaultGeneration, lockVault, getDeviceAuthorization, renewDeviceLease, deviceId]);
     useModalDialog(dialog, true, onClose, close);
     useEffect(() => {
         const currentLifecycle = lifecycle;

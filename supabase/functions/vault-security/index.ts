@@ -116,7 +116,7 @@ const serve = async (request: Request): Promise<Response> => {
   const authorization = request.headers.get('authorization');
   if (!authorization || !/^Bearer\s+\S+$/.test(authorization)) return reply(401, { error: 'unauthorized' });
   if (!url || !anonKey) return reply(500, { error: 'configuration_error' });
-  let body: { action?: unknown; deviceId?: unknown; token?: unknown; purpose?: unknown };
+  let body: { action?: unknown; deviceId?: unknown; token?: unknown; purpose?: unknown; ownerId?: unknown };
   try { body = await request.json(); } catch { return reply(400, { error: 'invalid_request' }); }
   if (typeof body.action !== 'string') return reply(400, { error: 'invalid_request' });
   const userClient = createClient(url, anonKey, { global: { headers: { authorization } } });
@@ -145,10 +145,19 @@ const serve = async (request: Request): Promise<Response> => {
       return response ? reply(200, response) : reply(403, { error: 'recovery_denied' });
     } catch { return reply(500, { error: 'recovery_error' }); }
   }
+  if (body.action === 'invalidate_member_session') {
+    if (typeof body.ownerId !== 'string' || !UUID.test(body.ownerId)) return reply(400, { error: 'invalid_request' });
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    if (!serviceKey) return reply(500, { error: 'configuration_error' });
+    const serviceClient = createClient(url, serviceKey);
+    const { error } = await serviceClient.auth.admin.signOut(body.ownerId, 'global');
+    if (error) return reply(502, { error: 'session_invalidation_failed' });
+    return reply(200, { ownerId: body.ownerId, status: 'invalidated' });
+  }
   if (body.action === 'webauthn_challenge') {
     const challenge = webauthnChallenge(body.purpose);
     if (!challenge) return reply(400, { error: 'invalid_request' });
-    const { data, error } = await userClient.rpc('get_vault_state');
+    const { data, error } = await userClient.rpc('get_vault_bootstrap_state');
     return !error && data ? reply(200, challenge) : reply(403, { error: 'webauthn_denied' });
   }
   return reply(404, { error: 'unknown_action' });

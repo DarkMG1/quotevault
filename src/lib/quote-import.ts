@@ -98,15 +98,18 @@ export function checkImports(rows: ImportRow[], existing: ExistingQuote[]): Impo
     });
 }
 
-async function rpc(name: 'sync_quotes' | 'checked_import', args: Record<string, unknown>) {
+async function rpc(name: 'sync_quotes' | 'checked_import', args: Record<string, unknown>, authorization: { deviceId: string; token: string } | null) {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => { controller.abort(); reject(new Error('Import request timed out. Check the saved import status before starting another.')); }, 20000);
     });
     try {
-        const { data, error } = await Promise.race([supabase.rpc(name, args).abortSignal(controller.signal), timeout]);
+        const { data, error } = await Promise.race([supabase.rpc(name, {
+            ...args, p_device_id: authorization?.deviceId ?? null, p_device_token: authorization?.token ?? null,
+        }).abortSignal(controller.signal), timeout]);
         if (error) throw Object.assign(new Error(error.message || 'Import request failed.'), { code: error.code });
+        if (data === null) throw Object.assign(new Error('Device authorization was denied. Unlock this device and retry the import.'), { code: '42501' });
         return data;
     } finally { clearTimeout(timer!); }
 }
@@ -116,7 +119,8 @@ export async function loadImportSnapshot(context: SyncContext, key: CryptoKey): 
     if (!await processSyncQueue(context)) throw new Error('Wait for synchronization, then check again.');
     const queue = await db.syncQueue.toArray();
     if (queue.some(row => row.actor_id === context.actorId && row.vault_generation === context.generation)) throw new Error('Resolve pending or rejected sync changes before importing.');
-    const data = await rpc('sync_quotes', { p_generation: context.generation, p_revision: null, p_operations: [] });
+    const authorization = context.getDeviceAuthorization ? await context.getDeviceAuthorization() : null;
+    const data = await rpc('sync_quotes', { p_generation: context.generation, p_revision: null, p_operations: [] }, authorization);
     if (data?.generation !== context.generation || !Number.isSafeInteger(data.revision) || data.revision < 0 || !Array.isArray(data.quotes)) throw new Error('Could not verify the current vault snapshot.');
     const quotes = await Promise.all(data.quotes.map(async (row: Quote) => {
         if (row.vault_generation !== context.generation || typeof row.text !== 'string' || !row.text.startsWith('$$E2E$$')) throw new Error('An existing quote could not be checked safely.');
@@ -171,7 +175,8 @@ export async function sendPendingImport(pending: PendingImport, context: SyncCon
     if (pending.actorId !== context.actorId || pending.generation !== context.generation) throw new Error('Saved import belongs to another vault session.');
     if (!navigator.onLine) throw new Error('Connect to check the saved import status.');
     try {
-        const data = await rpc('checked_import', { p_generation: pending.generation, p_revision: pending.revision, p_operations: pending.operations });
+        const authorization = context.getDeviceAuthorization ? await context.getDeviceAuthorization() : null;
+        const data = await rpc('checked_import', { p_generation: pending.generation, p_revision: pending.revision, p_operations: pending.operations }, authorization);
         const expected = new Set(pending.operations.map(op => op.operation_id));
         if (data?.generation !== pending.generation || !Array.isArray(data.results) || data.results.length !== expected.size ||
             !data.results.every((result: { operation_id: string; status: string }) => result.status === 'ok' && expected.delete(result.operation_id))) throw new Error('Import confirmation is incomplete. Check the saved import status.');

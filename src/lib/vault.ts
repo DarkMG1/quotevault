@@ -80,7 +80,7 @@ export async function loadVaultState(userId: string, localOnly = false): Promise
         if (cached) return cached;
         throw new Error('Connect once to prepare this account for offline access.');
     }
-    const { data, error } = await supabase.rpc('get_vault_state');
+    const { data, error } = await supabase.rpc('get_vault_bootstrap_state');
     if (error) {
         if (!error.code && cached) return cached; // Transport failure, not an authorization denial.
         clearCachedVaultState(userId);

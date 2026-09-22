@@ -22,12 +22,13 @@ interface CryptoContextType {
     encryptionKey: CryptoKey | null; isLocked: boolean; vaultGeneration: string | null; legacyVaultGeneration: string | null;
     deviceId: string | null; leaseExpiresAt: number | null;
     getDeviceAuthorization: () => Promise<{ deviceId: string; token: string }>;
+    renewDeviceLease: () => Promise<void>;
     lockVault: () => void; forgetDevice: () => Promise<void>; approveDeviceRequest: (requestId: string, fingerprint: string, code: string) => Promise<void>;
     setupRecovery: (phrase: string, replace?: boolean) => Promise<void>; recoverDevice: (phrase: string, mode: 'remembered' | 'passkey-prf') => Promise<void>;
     findPasskeyRestores: () => Promise<string[]>; restorePasskeyDevice: (deviceId: string) => Promise<void>;
 }
 const CryptoContext = createContext<CryptoContextType>({ encryptionKey: null, isLocked: true, vaultGeneration: null, legacyVaultGeneration: null, deviceId: null, leaseExpiresAt: null,
-    getDeviceAuthorization: async () => { throw new Error('Unlock an approved device first.'); }, lockVault: () => {}, forgetDevice: async () => {}, approveDeviceRequest: async () => {}, setupRecovery: async () => {}, recoverDevice: async () => {}, findPasskeyRestores: async () => [], restorePasskeyDevice: async () => {} });
+    getDeviceAuthorization: async () => { throw new Error('Unlock an approved device first.'); }, renewDeviceLease: async () => { throw new Error('Unlock an approved device first.'); }, lockVault: () => {}, forgetDevice: async () => {}, approveDeviceRequest: async () => {}, setupRecovery: async () => {}, recoverDevice: async () => {}, findPasskeyRestores: async () => [], restorePasskeyDevice: async () => {} });
 const MAX_TIMEOUT = 0x7fffffff;
 
 export const CryptoProvider = ({ children }: { children: ReactNode }) => {
@@ -97,6 +98,14 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
         const bundle = await decryptDeviceBundle(local, key);
         return { deviceId: local.deviceId, token: bundle.authorizationToken };
     }, [encryptionKey, user]);
+    const renewAuthorizationLease = useCallback(async () => {
+        const vault = stateRef.current;
+        if (!user || !vault || isLegacyVaultState(vault) || !deviceState) return;
+        const auth = await getDeviceAuthorization();
+        const next = await renewDeviceLease({ accountId: user.id, deviceId: auth.deviceId, token: auth.token,
+            generation: vault.generation, publicKeyFingerprint: deviceState.publicKeyFingerprint });
+        setDeviceState(next); setLeaseExpired(false); setLeaseExpiresAt(next.lease?.claims[5] ?? null);
+    }, [deviceState, getDeviceAuthorization, user]);
     const forgetDevice = useCallback(async () => {
         const local = deviceState; if (local && canSync && navigator.onLine) { const auth = await getDeviceAuthorization(); await revokeOwnDevice(local.deviceId, auth.token); }
         await clearLocalSyncState(); await db.deviceState.clear(); if (user) { clearCachedVaultState(user.id); clearProfileCache(user.id); }
@@ -145,6 +154,6 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
         const approvalUrl = pendingRequest ? `https://quotes.darkmg1.dev/#approve?request=${pendingRequest.requestId}&fingerprint=${encodeURIComponent(pendingRequest.fingerprint)}` : undefined;
         return <VaultGate state={gate as Exclude<typeof gate, 'unlocked'>} busy={busy} error={error} initializing={legacy && !state?.verifier} approvalUrl={approvalUrl} approvalCode={pendingRequest?.code} passkeyRestoreIds={passkeyRestores} onFindPasskeyRestores={() => { void findPasskeyRestores().then(setPasskeyRestores).catch(cause => setError(cause instanceof Error ? cause.message : 'Could not find passkey devices.')); }} onRestorePasskey={id => { void restorePasskeyDevice(id).then(() => setPasskeyRestores([])).catch(cause => setError(cause instanceof Error ? cause.message : 'Could not restore passkey device.')); }} onLegacyUnlock={handleLegacyUnlock} onRememberedUnlock={() => void unlockDevice('remembered')} onPasskeyUnlock={() => void unlockDevice('passkey-prf')} onEnroll={mode => void enroll(mode)} onCheckApproval={() => void unlockDevice(deviceState?.protectionMode ?? 'remembered')} onRecover={(phrase, mode) => { void recoverDevice(phrase, mode).then(() => unlockDevice(mode)).catch(cause => setError(cause instanceof Error ? cause.message : 'Recovery failed.')); }} onRetry={() => void refreshSettings()} onSignOut={() => void signOut()} />;
     }
-    return <CryptoContext.Provider value={{ encryptionKey, isLocked: false, vaultGeneration: state?.generation ?? null, legacyVaultGeneration: isLegacyVaultState(state) ? state.legacy_generation : null, deviceId: deviceState?.deviceId ?? null, leaseExpiresAt, getDeviceAuthorization, lockVault, forgetDevice, approveDeviceRequest, setupRecovery, recoverDevice, findPasskeyRestores, restorePasskeyDevice }}>{children}</CryptoContext.Provider>;
+    return <CryptoContext.Provider value={{ encryptionKey, isLocked: false, vaultGeneration: state?.generation ?? null, legacyVaultGeneration: isLegacyVaultState(state) ? state.legacy_generation : null, deviceId: deviceState?.deviceId ?? null, leaseExpiresAt, getDeviceAuthorization, renewDeviceLease: renewAuthorizationLease, lockVault, forgetDevice, approveDeviceRequest, setupRecovery, recoverDevice, findPasskeyRestores, restorePasskeyDevice }}>{children}</CryptoContext.Provider>;
 };
 export const useCrypto = () => useContext(CryptoContext);

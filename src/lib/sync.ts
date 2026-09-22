@@ -6,6 +6,8 @@ export interface SyncContext {
     actorId: string;
     generation: string;
     legacyGeneration?: string | null;
+    getDeviceAuthorization?: () => Promise<{ deviceId: string; token: string }>;
+    renewLease?: () => Promise<void>;
     onGenerationMismatch?: () => void;
 }
 
@@ -244,18 +246,24 @@ async function syncBatch(context: SyncContext, epoch: number): Promise<{ more: b
     let data: unknown;
     let error: unknown;
     let status: number | undefined;
+    const authorization = context.getDeviceAuthorization
+        ? await context.getDeviceAuthorization()
+        : { deviceId: null, token: null };
     try {
         // Auth restoration can stall before fetch sees the abort signal.
         ({ data, error, status } = await Promise.race([supabase.rpc('sync_quotes', {
             p_generation: context.generation,
             p_revision: revision,
-            p_operations: operations
+            p_operations: operations,
+            p_device_id: authorization.deviceId,
+            p_device_token: authorization.token,
         }).abortSignal(controller.signal), deadline]));
     } finally {
         window.clearTimeout(timeout);
         if (activeAbortController === controller) activeAbortController = null;
     }
-    if (error) throw Object.assign(new Error('Unable to synchronize. Changes remain on this device.'), error, { status });
+    if (error) throw Object.assign(new Error(error.message || 'Unable to synchronize. Changes remain on this device.'), error, { status });
+    if (data === null) throw Object.assign(new Error('Device authorization was denied. Unlock this device and retry synchronization.'), { code: '42501', status: 403 });
     if (epoch !== syncEpoch) return { more: false, performed: true };
     const sentIds = new Set(operations.map(operation => operation.operation_id));
     if (!validResponse(data, sentIds)) throw new Error('Invalid sync response.');
@@ -292,6 +300,7 @@ async function syncBatch(context: SyncContext, epoch: number): Promise<{ more: b
         }
     });
     if (epoch !== syncEpoch) return { more: false, performed: true };
+    if (context.renewLease) await context.renewLease();
     const remaining = (await db.syncQueue.toArray()).some(item =>
         item.actor_id === context.actorId && item.vault_generation === context.generation && item.status !== 'rejected' && item.status !== 'blocked'
     );

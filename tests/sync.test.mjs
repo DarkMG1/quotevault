@@ -128,6 +128,24 @@ await (async () => {
 })();
 
 await (async () => {
+  const { db, sync, rpcCalls } = setup();
+  await enqueue(db, sync, 'INSERT', quote('authorized'));
+  let renewals = 0;
+  await sync.processSyncQueue({
+    actorId: 'u1', generation: 'g1',
+    getDeviceAuthorization: async () => ({ deviceId: '11111111-1111-4111-8111-111111111111', token: 'transient-token' }),
+    renewLease: async () => { renewals++; },
+  });
+  assert.equal(rpcCalls[0].p_generation, 'g1');
+  assert.equal(rpcCalls[0].p_revision, null);
+  assert.equal(rpcCalls[0].p_device_id, '11111111-1111-4111-8111-111111111111');
+  assert.equal(rpcCalls[0].p_device_token, 'transient-token');
+  assert.deepEqual(Object.keys(rpcCalls[0]).sort(), ['p_device_id', 'p_device_token', 'p_generation', 'p_operations', 'p_revision'], 'sync sends exact transient device authorization arguments');
+  assert.equal(renewals, 1, 'successful sync renews the signed lease');
+  assert.equal(JSON.stringify(rpcCalls[0]).includes('manual plaintext'), false, 'sync arguments contain no quote plaintext');
+})();
+
+await (async () => {
   const { sync } = setup();
   assert.equal(sync.isTransientSyncFailure({ status: 503 }), true, 'server failures retry');
   assert.equal(sync.isTransientSyncFailure({ message: 'Failed to fetch' }), true, 'network failures retry');
@@ -239,7 +257,7 @@ await (async () => {
   const { db, sync } = setup(() => null);
   await db.quotes.put(quote('safe'));
   await enqueue(db, sync, 'INSERT', quote('safe'));
-  await assert.rejects(sync.processSyncQueue({ actorId: 'u1', generation: 'g1' }), /Invalid sync response/);
+  await assert.rejects(sync.processSyncQueue({ actorId: 'u1', generation: 'g1' }), /Device authorization was denied/);
   assert.equal(db.quotes.rows.size, 1, 'a malformed response never clears local data');
   assert.equal(db.syncQueue.rows.size, 1, 'a malformed response never acknowledges queued work');
 })();
