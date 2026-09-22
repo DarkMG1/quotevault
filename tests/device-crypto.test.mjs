@@ -39,6 +39,16 @@ test('a wrapped vault key validates its target and generation', async () => {
     version: 1, vaultId: 'quotevault', generation: GENERATION_A,
     targetFingerprint: fingerprint, masterKey: new Uint8Array(33),
   }, pair.publicKey));
+  const backing = new masterKey.constructor(64);
+  const slicedMasterKey = backing.subarray(16, 48);
+  webcrypto.getRandomValues(slicedMasterKey);
+  const sliced = await cryptoApi.wrapVaultKey({
+    version: 1, vaultId: 'quotevault', generation: GENERATION_A,
+    targetFingerprint: fingerprint, masterKey: slicedMasterKey,
+  }, pair.publicKey);
+  assert.deepEqual(await cryptoApi.unwrapVaultKey(sliced, pair.privateKey, {
+    vaultId: 'quotevault', generation: GENERATION_A, targetFingerprint: fingerprint,
+  }), slicedMasterKey);
 });
 
 test('wrapping keys use the required RSA-OAEP parameters', async () => {
@@ -90,6 +100,13 @@ test('private bundles authenticate their binding and reject malformed base64', a
   const bundle = { version: 1, privateJwk: await webcrypto.subtle.exportKey('jwk', pair.privateKey), authorizationToken: token };
   const encrypted = await cryptoApi.encryptPrivateBundle(bundle, key, binding);
   assert.equal(JSON.stringify(await cryptoApi.decryptPrivateBundle(encrypted, key, binding)), JSON.stringify(bundle));
+  await assert.rejects(cryptoApi.encryptPrivateBundle({ ...bundle, privateJwk: { ...bundle.privateJwk, d: undefined } }, key, binding));
+  const otherPair = await cryptoApi.generateWrappingKeyPair();
+  const otherPrivateJwk = await webcrypto.subtle.exportKey('jwk', otherPair.privateKey);
+  await assert.rejects(cryptoApi.encryptPrivateBundle({ ...bundle, privateJwk: otherPrivateJwk }, key, binding));
+  const forged = await cryptoApi.encryptEnvelope(JSON.stringify({ ...bundle, privateJwk: otherPrivateJwk }), key,
+    JSON.stringify([1, binding.accountId, binding.recordId, binding.publicKeyFingerprint, binding.protectionMode, binding.version]));
+  await assert.rejects(cryptoApi.decryptPrivateBundle(forged, key, binding));
   await assert.rejects(cryptoApi.decryptPrivateBundle(encrypted, key, { ...binding, accountId: 'account-b' }));
   await assert.rejects(cryptoApi.decryptPrivateBundle({ ...encrypted, iv: '*' }, key, binding));
   await assert.rejects(cryptoApi.decryptPrivateBundle({ ...encrypted, data: `${encrypted.data}*` }, key, binding));

@@ -28,12 +28,14 @@ const BASE64URL = /^[A-Za-z0-9_-]+$/;
 const fail = (): never => { throw new Error('Invalid encrypted device data.'); };
 const text = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
 const source = (bytes: Uint8Array): BufferSource => bytes as unknown as BufferSource;
-const bytesToBase64 = (bytes: Uint8Array): string => arrayBufferToBase64(bytes.buffer as ArrayBuffer);
+const bytesToBase64 = (bytes: Uint8Array): string => arrayBufferToBase64(bytes);
 const base64ToBytes = (value: unknown): Uint8Array => {
     if (typeof value !== 'string') return fail();
     const encoded = value;
-    if (!BASE64.test(encoded) || bytesToBase64(new Uint8Array(base64ToArrayBuffer(encoded))) !== encoded) fail();
-    return new Uint8Array(base64ToArrayBuffer(encoded));
+    if (!BASE64.test(encoded)) fail();
+    const bytes = new Uint8Array(base64ToArrayBuffer(encoded));
+    if (bytesToBase64(bytes) !== encoded) fail();
+    return bytes;
 };
 const bytesToBase64url = (bytes: Uint8Array): string => bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const base64urlToBytes = (value: unknown): Uint8Array => {
@@ -158,31 +160,43 @@ export const deriveRecoveryBundleKey = async (phrase: string, kdf: RecoveryKdf):
     }
 };
 
-const validBundle = (value: unknown): value is PrivateDeviceBundle => {
+const validBundle = async (value: unknown, binding: BundleBinding): Promise<boolean> => {
     if (!value || typeof value !== 'object') return false;
     const bundle = value as Partial<PrivateDeviceBundle>;
     if (bundle.version !== 1 || !bundle.privateJwk || typeof bundle.privateJwk !== 'object' || typeof bundle.authorizationToken !== 'string') return false;
     try {
         const token = base64urlToBytes(bundle.authorizationToken);
         try {
-            return token.byteLength === 32;
+            if (token.byteLength !== 32) return false;
         } finally {
             token.fill(0);
         }
+        const privateJwk = bundle.privateJwk as JsonWebKey;
+        for (const field of ['d', 'p', 'q', 'dp', 'dq', 'qi'] as const) {
+            const bytes = base64urlToBytes(privateJwk[field]);
+            try {
+                if (bytes.byteLength === 0) return false;
+            } finally {
+                bytes.fill(0);
+            }
+        }
+        if (await fingerprintPublicJwk(privateJwk) !== binding.publicKeyFingerprint) return false;
+        await crypto.subtle.importKey('jwk', privateJwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['decrypt']);
+        return true;
     } catch {
         return false;
     }
 };
 
-export const encryptPrivateBundle = (bundle: PrivateDeviceBundle, key: CryptoKey, binding: BundleBinding): Promise<EnvelopeCiphertext> => {
-    if (!validBundle(bundle)) fail();
+export const encryptPrivateBundle = async (bundle: PrivateDeviceBundle, key: CryptoKey, binding: BundleBinding): Promise<EnvelopeCiphertext> => {
+    if (!await validBundle(bundle, binding)) fail();
     return encryptEnvelope(JSON.stringify(bundle), key, bundleAad(binding));
 };
 
 export const decryptPrivateBundle = async (payload: EnvelopeCiphertext, key: CryptoKey, binding: BundleBinding): Promise<PrivateDeviceBundle> => {
     try {
         const bundle: unknown = JSON.parse(await decryptEnvelope(payload, key, bundleAad(binding)));
-        if (!validBundle(bundle)) fail();
+        if (!await validBundle(bundle, binding)) fail();
         return bundle as PrivateDeviceBundle;
     } catch {
         return fail();
