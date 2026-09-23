@@ -43,6 +43,7 @@ if [ -f supabase/migrations/20260922110000_device_bootstrap_contracts.sql ]; the
   psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922110000_device_bootstrap_contracts.sql
 fi
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922120000_envelope_migration.sql
+# Reapplication is intentional: this verifies additive migration idempotence.
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922120000_envelope_migration.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-migration.sql
 createdb "$migration_db"

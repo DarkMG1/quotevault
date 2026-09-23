@@ -27,6 +27,8 @@ It preserves every quote. If a valid legacy `$$E2E$$` quote exists, its encrypte
 
 Run [tests/database.sql](../tests/database.sql) only in a disposable Supabase project after the migration. It always rolls back, but several assertions deliberately expect the test vault to contain exactly one quote.
 
+Device-envelope migration production prerequisite: install and enable Supabase's native `pg_cron` extension before applying `20260922120000_envelope_migration.sql`. The migration schedules the hourly `quotevault-purge-expired-vault-rollback` job idempotently. Disposable databases without `pg_cron` remain supported for tests; an operator must invoke the service-only purge RPC until production scheduling is available.
+
 Local PostgreSQL 17 verification, using an empty disposable database:
 
 ```sh

@@ -19,6 +19,7 @@ begin
     if key not in ('id','text','author','context','quote_date','created_at','user_id','vault_generation') then return false; end if;
   end loop;
   if p_row ?& array['id','text','author','context','quote_date','created_at','user_id','vault_generation'] is not true
+     or jsonb_typeof(p_row->'author') <> 'string' or jsonb_typeof(p_row->'context') <> 'string' or jsonb_typeof(p_row->'vault_generation') <> 'string'
      or p_row->>'author' <> 'ENCRYPTED' or p_row->>'context' <> 'ENCRYPTED'
      or p_row->>'vault_generation' <> p_generation::text or left(p_row->>'text', 7) <> '$$E2E$$'
      or jsonb_typeof(p_row->'id') <> 'string' or jsonb_typeof(p_row->'text') <> 'string'
@@ -29,7 +30,7 @@ begin
      or exists (select 1 from jsonb_object_keys(cipher) k where k not in ('version','iv','data'))
      or p_row->>'id' !~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
      or p_row->>'user_id' !~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
-     or p_row->>'created_at' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,3})?Z$' then return false; end if;
+     or p_row->>'created_at' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,6})?Z$' then return false; end if;
   if p_row->>'quote_date' is not null then perform (p_row->>'quote_date')::date; end if;
   perform (p_row->>'created_at')::timestamptz;
   return true;
@@ -49,6 +50,8 @@ end $copy$;
 create or replace function public.qv_migration_ready(p_migration public.vault_migrations)
 returns boolean language sql stable security definer set search_path = public, pg_temp as $$
   select (select count(*) from public.vault_migration_quote_copies where migration_id=p_migration.id and copy_kind='staged')=p_migration.expected_quote_count
+    and not exists (select 1 from public.allowlist a where not exists (select 1 from auth.users u join public.vault_devices d on d.owner_id=u.id and d.status='active' where lower(u.email)=lower(a.email)))
+    and not exists (select 1 from public.allowlist a where not exists (select 1 from auth.users u join public.vault_recovery_keys k on k.owner_id=u.id and k.status='active' where lower(u.email)=lower(a.email)))
     and not exists (select 1 from public.vault_devices d left join public.vault_device_wrappers w on w.device_id=d.id and w.generation=p_migration.target_generation and w.purpose='active' where d.status='active' and w.device_id is null)
     and not exists (select 1 from public.vault_recovery_keys k left join public.vault_recovery_wrappers w on w.recovery_key_id=k.id and w.generation=p_migration.target_generation where k.status='active' and w.recovery_key_id is null)
 $$;
@@ -119,6 +122,35 @@ begin
   return jsonb_build_object('migration_id',migration.id,'status',migration.status);
 end $wrappers$;
 
+create or replace function public.get_pending_envelope_migration(p_device_id uuid,p_token text)
+returns jsonb language plpgsql security definer set search_path = public, pg_temp as $pending$
+declare state public.vault_state%rowtype; migration public.vault_migrations%rowtype;
+begin
+  if public.qv_is_admin() is not true then raise exception 'QuoteVault administrator membership is required' using errcode='42501'; end if;
+  select * into state from public.vault_state where singleton for share;
+  if state.envelope_status<>'preparing' or state.active_migration_id is null or public.qv_authorize_device(p_device_id,p_token,state.generation,'state') is null then return null; end if;
+  select * into migration from public.vault_migrations where id=state.active_migration_id and status in ('staging','ready');
+  if migration.id is null then return null; end if;
+  return jsonb_build_object('migration_id',migration.id,'status',migration.status,'source_generation',migration.source_generation,'target_generation',migration.target_generation,'source_revision',migration.source_revision,'expected_quote_count',migration.expected_quote_count,'staged_quote_count',(select count(*) from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='staged'));
+end $pending$;
+
+create or replace function public.abandon_envelope_migration(p_migration_id uuid,p_device_id uuid,p_token text)
+returns jsonb language plpgsql security definer set search_path = public, pg_temp as $abandon$
+declare state public.vault_state%rowtype; migration public.vault_migrations%rowtype;
+begin
+  if public.qv_is_admin() is not true then raise exception 'QuoteVault administrator membership is required' using errcode='42501'; end if;
+  select * into state from public.vault_state where singleton for update;
+  if public.qv_authorize_device(p_device_id,p_token,state.generation,'state') is null then raise exception 'Migration device is not authorized' using errcode='42501'; end if;
+  select * into migration from public.vault_migrations where id=p_migration_id for update;
+  if migration.id is null or migration.status not in ('staging','ready') or state.envelope_status<>'preparing' or state.active_migration_id is distinct from migration.id then raise exception 'Migration cannot be abandoned' using errcode='40001'; end if;
+  delete from public.vault_device_wrappers where generation=migration.target_generation;
+  delete from public.vault_recovery_wrappers where generation=migration.target_generation;
+  delete from public.vault_migration_quote_copies where migration_id=migration.id;
+  update public.vault_migrations set status='abandoned' where id=migration.id;
+  update public.vault_state set generation=(migration.source_state->>'generation')::uuid,revision=(migration.source_state->>'revision')::bigint,envelope_status=migration.source_state->>'envelope_status',prepared_generation=nullif(migration.source_state->>'prepared_generation','')::uuid,active_migration_id=nullif(migration.source_state->>'active_migration_id','')::uuid where singleton;
+  return jsonb_build_object('migration_id',migration.id,'status','abandoned');
+end $abandon$;
+
 create or replace function public.qv_migration_device_ok(p_device_id uuid,p_token text,p_state public.vault_state)
 returns boolean language plpgsql stable security definer set search_path = public, pg_temp as $ok$
 declare d public.vault_devices%rowtype; b bytea;
@@ -147,7 +179,7 @@ begin
      or exists((select quote_id from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='staged') except (select id from public.quotes where vault_generation=migration.source_generation))
      or public.qv_migration_ready(migration) is not true then raise exception 'Migration source, staged rows, or wrappers changed' using errcode='40001'; end if;
   insert into public.vault_migration_quote_copies(migration_id,copy_kind,quote_id,encrypted_row,vault_generation)
-    select migration.id,'rollback',src.id,jsonb_build_object('id',src.id,'text',src.text,'author',src.author,'context',src.context,'quote_date',src.quote_date,'created_at',to_char(src.created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'user_id',src.user_id,'vault_generation',src.vault_generation),src.vault_generation from public.quotes src where src.vault_generation=migration.source_generation order by src.id;
+    select migration.id,'rollback',src.id,jsonb_build_object('id',src.id,'text',src.text,'author',src.author,'context',src.context,'quote_date',src.quote_date,'created_at',to_char(src.created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),'user_id',src.user_id,'vault_generation',src.vault_generation),src.vault_generation from public.quotes src where src.vault_generation=migration.source_generation order by src.id;
   delete from public.quotes where vault_generation=migration.source_generation;
   for staged in select * from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='staged' order by quote_id loop
     insert into public.quotes(id,text,author,context,quote_date,created_at,user_id,vault_generation) values(staged.quote_id,staged.encrypted_row->>'text',staged.encrypted_row->>'author',staged.encrypted_row->>'context',nullif(staged.encrypted_row->>'quote_date','')::date,(staged.encrypted_row->>'created_at')::timestamptz,(staged.encrypted_row->>'user_id')::uuid,migration.target_generation);
@@ -164,7 +196,11 @@ begin
   if public.qv_is_admin() is not true then raise exception 'QuoteVault administrator membership is required' using errcode='42501'; end if;
   select * into state from public.vault_state where singleton for update; select * into migration from public.vault_migrations where id=p_migration_id for update;
   for d in select * from public.vault_devices order by id for update loop null; end loop; for recovery in select * from public.vault_recovery_keys order by id for update loop null; end loop; for target_quote in select * from public.quotes where vault_generation=migration.target_generation order by id for update loop null; end loop;
-  if migration.id is null or migration.status<>'activated' or state.active_migration_id is distinct from migration.id or state.envelope_status<>'maintenance' or migration.rollback_expires_at<=now() or public.qv_migration_device_ok(p_device_id,p_token,state) is not true then raise exception 'Migration rollback is unavailable' using errcode='40001'; end if;
+  if migration.id is null or migration.status<>'activated' or state.active_migration_id is distinct from migration.id or state.envelope_status<>'maintenance' or migration.rollback_expires_at<=now() or public.qv_migration_device_ok(p_device_id,p_token,state) is not true
+     or (select count(*) from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='rollback')<>migration.expected_quote_count
+     or exists((select quote_id from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='rollback') except (select id from public.quotes where vault_generation=migration.target_generation))
+     or exists((select id from public.quotes where vault_generation=migration.target_generation) except (select quote_id from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='rollback'))
+     or exists(select 1 from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='rollback' and vault_generation is distinct from migration.source_generation) then raise exception 'Migration rollback is unavailable' using errcode='40001'; end if;
   delete from public.quotes where vault_generation=migration.target_generation;
   for copy in select * from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='rollback' order by quote_id loop
     insert into public.quotes(id,text,author,context,quote_date,created_at,user_id,vault_generation) values(copy.quote_id,copy.encrypted_row->>'text',copy.encrypted_row->>'author',copy.encrypted_row->>'context',nullif(copy.encrypted_row->>'quote_date','')::date,(copy.encrypted_row->>'created_at')::timestamptz,(copy.encrypted_row->>'user_id')::uuid,migration.source_generation);
@@ -187,7 +223,7 @@ begin
   if migration.id is null or migration.status<>'activated' or state.envelope_status<>'maintenance' or state.active_migration_id is distinct from migration.id or public.qv_migration_device_ok(p_device_id,p_token,state) is not true
      or exists((select id from public.quotes where vault_generation=migration.target_generation) except (select quote_id from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='staged'))
      or exists((select quote_id from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='staged') except (select id from public.quotes where vault_generation=migration.target_generation))
-     or exists(select 1 from public.quotes q join public.vault_migration_quote_copies c on c.migration_id=migration.id and c.copy_kind='staged' and c.quote_id=q.id where q.vault_generation=migration.target_generation and c.encrypted_row is distinct from jsonb_build_object('id',q.id,'text',q.text,'author',q.author,'context',q.context,'quote_date',q.quote_date,'created_at',to_char(q.created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'user_id',q.user_id,'vault_generation',q.vault_generation)) then raise exception 'Migration target verification failed' using errcode='40001'; end if;
+     or exists(select 1 from public.quotes q join public.vault_migration_quote_copies c on c.migration_id=migration.id and c.copy_kind='staged' and c.quote_id=q.id where q.vault_generation=migration.target_generation and c.encrypted_row is distinct from jsonb_build_object('id',q.id,'text',q.text,'author',q.author,'context',q.context,'quote_date',q.quote_date,'created_at',to_char(q.created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),'user_id',q.user_id,'vault_generation',q.vault_generation)) then raise exception 'Migration target verification failed' using errcode='40001'; end if;
   delete from public.vault_migration_quote_copies where migration_id=migration.id;
   update public.vault_migrations set status='finalized' where id=migration.id;
   update public.vault_state set envelope_status='active',prepared_generation=null,active_migration_id=null where singleton;
@@ -217,7 +253,7 @@ begin
   if public.qv_is_admin() is not true then raise exception 'QuoteVault administrator membership is required' using errcode='42501'; end if;
   select * into state from public.vault_state where singleton for share; select * into migration from public.vault_migrations where id=p_migration_id for share;
   if migration.id is null or migration.status<>'activated' or state.envelope_status<>'maintenance' or state.active_migration_id is distinct from migration.id or public.qv_migration_device_ok(p_device_id,p_token,state) is not true then raise exception 'Migration snapshot is unavailable' using errcode='40001'; end if;
-  return jsonb_build_object('migration_id',migration.id,'generation',state.generation,'revision',state.revision,'quotes',(select coalesce(jsonb_agg(jsonb_build_object('id',q.id,'text',q.text,'author',q.author,'context',q.context,'quote_date',q.quote_date,'created_at',to_char(q.created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'user_id',q.user_id,'vault_generation',q.vault_generation) order by q.id),'[]'::jsonb) from public.quotes q where q.vault_generation=migration.target_generation));
+  return jsonb_build_object('migration_id',migration.id,'generation',state.generation,'revision',state.revision,'quotes',(select coalesce(jsonb_agg(jsonb_build_object('id',q.id,'text',q.text,'author',q.author,'context',q.context,'quote_date',q.quote_date,'created_at',to_char(q.created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),'user_id',q.user_id,'vault_generation',q.vault_generation) order by q.id),'[]'::jsonb) from public.quotes q where q.vault_generation=migration.target_generation));
 end $snapshot$;
 
 create or replace function public.qv_reject_maintenance_device_mutation()
@@ -230,6 +266,9 @@ begin
 end $$;
 drop trigger if exists qv_no_device_mutation_in_maintenance on public.vault_devices;
 create trigger qv_no_device_mutation_in_maintenance before insert or update or delete on public.vault_devices
+for each row execute function public.qv_reject_maintenance_device_mutation();
+drop trigger if exists qv_no_device_wrapper_mutation_in_maintenance on public.vault_device_wrappers;
+create trigger qv_no_device_wrapper_mutation_in_maintenance before insert or update or delete on public.vault_device_wrappers
 for each row execute function public.qv_reject_maintenance_device_mutation();
 drop trigger if exists qv_no_recovery_key_mutation_in_maintenance on public.vault_recovery_keys;
 create trigger qv_no_recovery_key_mutation_in_maintenance before insert or update or delete on public.vault_recovery_keys
@@ -252,7 +291,22 @@ exception when others then return null;
 end $auth$;
 
 revoke all on function public.qv_valid_migration_v2_quote(jsonb,uuid), public.qv_migration_ready(public.vault_migrations), public.qv_migration_device_ok(uuid,text,public.vault_state) from public,anon,authenticated;
-revoke all on function public.prepare_envelope_migration(uuid, bigint, uuid,text,uuid,jsonb), public.stage_envelope_quotes(uuid,uuid,text,jsonb), public.stage_envelope_wrappers(uuid,uuid,text,jsonb,jsonb), public.activate_envelope_migration(uuid,uuid,text), public.rollback_envelope_migration(uuid,uuid,text), public.finalize_envelope_migration(uuid,uuid,text), public.get_envelope_migration_snapshot(uuid,uuid,text), public.purge_expired_vault_rollback() from public,anon,authenticated;
-grant execute on function public.prepare_envelope_migration(uuid, bigint, uuid,text,uuid,jsonb), public.stage_envelope_quotes(uuid,uuid,text,jsonb), public.stage_envelope_wrappers(uuid,uuid,text,jsonb,jsonb), public.activate_envelope_migration(uuid,uuid,text), public.rollback_envelope_migration(uuid,uuid,text), public.finalize_envelope_migration(uuid,uuid,text), public.get_envelope_migration_snapshot(uuid,uuid,text) to authenticated;
+revoke all on function public.prepare_envelope_migration(uuid, bigint, uuid,text,uuid,jsonb), public.stage_envelope_quotes(uuid,uuid,text,jsonb), public.stage_envelope_wrappers(uuid,uuid,text,jsonb,jsonb), public.get_pending_envelope_migration(uuid,text), public.abandon_envelope_migration(uuid,uuid,text), public.activate_envelope_migration(uuid,uuid,text), public.rollback_envelope_migration(uuid,uuid,text), public.finalize_envelope_migration(uuid,uuid,text), public.get_envelope_migration_snapshot(uuid,uuid,text), public.purge_expired_vault_rollback() from public,anon,authenticated;
+grant execute on function public.prepare_envelope_migration(uuid, bigint, uuid,text,uuid,jsonb), public.stage_envelope_quotes(uuid,uuid,text,jsonb), public.stage_envelope_wrappers(uuid,uuid,text,jsonb,jsonb), public.get_pending_envelope_migration(uuid,text), public.abandon_envelope_migration(uuid,uuid,text), public.activate_envelope_migration(uuid,uuid,text), public.rollback_envelope_migration(uuid,uuid,text), public.finalize_envelope_migration(uuid,uuid,text), public.get_envelope_migration_snapshot(uuid,uuid,text) to authenticated;
 grant execute on function public.purge_expired_vault_rollback() to service_role;
+
+-- Production requires pg_cron. Disposable and hosted projects without it keep
+-- the service-only RPC available for an operator/Edge scheduled invocation.
+do $cron$
+declare scheduled boolean;
+begin
+  if exists(select 1 from pg_extension where extname='pg_cron') and to_regnamespace('cron') is not null then
+    execute $$select exists(select 1 from cron.job where jobname='quotevault-purge-expired-vault-rollback')$$ into scheduled;
+    if not scheduled then
+      execute 'select cron.schedule(''quotevault-purge-expired-vault-rollback'', ''0 * * * *'', ''select public.purge_expired_vault_rollback()'')';
+    end if;
+  end if;
+exception when invalid_schema_name or undefined_table or undefined_function or insufficient_privilege then
+  raise notice 'pg_cron is required in production to schedule rollback purge';
+end $cron$;
 commit;
