@@ -23,7 +23,14 @@ const b64 = (value: unknown, min: number, max = min): string => { if (typeof val
 const envelope = (value: unknown): EnvelopeCiphertext => { const data = exact(value, ['version', 'iv', 'data']); if (data.version !== 2) fail(); return { version: 2, iv: b64(data.iv, 12), data: b64(data.data, 16, Number.MAX_SAFE_INTEGER) }; };
 const generation = (value: unknown): string => uuid(value);
 const protection = (value: unknown): Record<string, unknown> => validateDeviceProtection(value, 'passkey-prf');
-const edge = async (body: Record<string, unknown>): Promise<unknown> => { const { data, error } = await supabase.functions.invoke('vault-security', { body }); if (error) fail('Device security request failed.'); return data; };
+const edge = async (body: Record<string, unknown>): Promise<unknown> => {
+    const { data, error } = await supabase.functions.invoke('vault-security', { body });
+    if (!error) return data;
+    // The function answers with a short non-secret code; surface it so failures are diagnosable.
+    const response = (error as { context?: unknown }).context;
+    const code = response instanceof Response ? await response.clone().json().then(value => typeof value?.error === 'string' ? value.error : typeof value?.code === 'string' ? value.code : `HTTP ${response.status}`, () => `HTTP ${response.status}`) : error.name;
+    fail(`Device security request failed (${code}).`);
+};
 const rpc = async (name: string, args: Record<string, unknown>): Promise<unknown> => { const { data, error } = await supabase.rpc(name, args); if (error) fail('Device security request failed.'); return data; };
 
 export interface PasskeyProtection { version: 1; rpId: 'quotes.darkmg1.dev'; credentialId: string; prfSalt: string; kdf: 'HKDF-SHA-256' }
