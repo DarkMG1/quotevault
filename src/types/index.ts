@@ -53,6 +53,7 @@ export interface DeviceLocalState {
     rememberedKey?: CryptoKey;
     lease?: DeviceLease;
     wrapper?: { generation: string; wrappedKey: string };
+    preparedWrapper?: { generation: string; wrappedKey: string };
     /** Safe local marker: first enrollment may not reveal quotes before recovery exists. */
     recoverySetupRequired?: boolean;
 }

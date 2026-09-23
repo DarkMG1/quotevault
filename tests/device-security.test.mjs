@@ -38,11 +38,14 @@ function setup({ rpcReply = () => null, edgeReply = () => null, navigatorValue =
 }
 
 test('passkey restore metadata rejects server wrappers, tokens, and malformed protection', async () => {
-  const good = { generation, devices: [{ device_id: deviceId, protection_mode: 'passkey-prf', protection: { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: token, prfSalt: fingerprint, kdf: 'HKDF-SHA-256' }, public_key_fingerprint: fingerprint, encrypted_private_bundle: bundle }] };
+  const preparedGeneration = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const good = { generation, devices: [{ device_id: deviceId, protection_mode: 'passkey-prf', protection: { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: token, prfSalt: fingerprint, kdf: 'HKDF-SHA-256' }, public_key_fingerprint: fingerprint, encrypted_private_bundle: bundle, generation: preparedGeneration }] };
   const { api } = setup({ rpcReply: () => good });
   const result = await api.getPasskeyRestoreDevices();
   assert.equal(result[0].deviceId, deviceId);
+  assert.equal(result[0].generation, preparedGeneration);
   await assert.rejects(setup({ rpcReply: () => ({ ...good, devices: [{ ...good.devices[0], wrapped_key: 'A'.repeat(512) }] }) }).api.getPasskeyRestoreDevices(), /restore/i);
+  await assert.rejects(setup({ rpcReply: () => ({ ...good, devices: [{ ...good.devices[0], generation: undefined }] }) }).api.getPasskeyRestoreDevices(), /Invalid device/i);
   await assert.rejects(setup({ rpcReply: () => ({ ...good, devices: [{ ...good.devices[0], protection: { ...good.devices[0].protection, extra: true } }] }) }).api.getPasskeyRestoreDevices(), /protection/i);
 });
 
@@ -63,6 +66,16 @@ test('approval completion renews and verifies its lease before fetching the wrap
   states.set(accountId, { accountId, deviceId, publicKeyFingerprint: fingerprint, protectionMode: 'remembered', protection: { version: 1, mode: 'remembered' }, encryptedPrivateBundle: bundle });
   await api.renewThenCompleteDevice({ accountId, deviceId, token, generation, publicKeyFingerprint: fingerprint });
   assert.deepEqual(calls.filter(([name]) => name === 'renew' || name === 'complete_device').map(([name]) => name), ['renew', 'complete_device']);
+});
+
+test('prepared wrapper completion renews against the still-active source generation', async () => {
+  const sourceGeneration = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const lease = { version: 1, claims: [1, deviceId, accountId, sourceGeneration, 1, 2, fingerprint], signature: 'AA==' };
+  const { api, states, calls } = setup({ edgeReply: () => lease });
+  states.set(accountId, { accountId, deviceId, publicKeyFingerprint: fingerprint, protectionMode: 'remembered', protection: { version: 1, mode: 'remembered' }, encryptedPrivateBundle: bundle });
+  const completed = await api.renewThenCompleteDevice({ accountId, deviceId, token, generation, leaseGeneration: sourceGeneration, publicKeyFingerprint: fingerprint });
+  assert.equal(completed.lease.claims[3], sourceGeneration);
+  assert.equal(calls.find(([name]) => name === 'complete_device')[1][4], generation);
 });
 
 test('device requests do not guess whether recovery setup is required', async () => {

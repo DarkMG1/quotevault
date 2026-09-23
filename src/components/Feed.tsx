@@ -13,7 +13,7 @@ import { decryptQuoteForDisplay, getErrorMessage, useModalDialog } from './ui';
 import { authorParticipants, parseQuoteSearch, replaceSearchTag, searchQuotes } from '../lib/quote-search';
 
 export const Feed = () => {
-    const { quotes, loading, isSyncing, initialFetchPending, pendingCount, lastSyncedAt, refresh, deleteQuote, syncError, syncErrors, retrySyncOperation } = useQuotes();
+    const { quotes, loading, isSyncing, initialFetchPending, pendingCount, lastSyncedAt, refresh, deleteQuote, syncError, syncErrors, retrySyncOperation, legacyConversionRequired, unlockLegacyChanges } = useQuotes();
     const { user } = useAuth();
     const { encryptionKey } = useCrypto();
     const [importOpen, setImportOpen] = useState(false);
@@ -29,6 +29,9 @@ export const Feed = () => {
     const [deleteError, setDeleteError] = useState('');
     const [isDeleting, setIsDeleting] = useState(false);
     const [syncRetryError, setSyncRetryError] = useState('');
+    const [previousVaultKey, setPreviousVaultKey] = useState('');
+    const [unlockingLegacy, setUnlockingLegacy] = useState(false);
+    const [legacyUnlockError, setLegacyUnlockError] = useState('');
     const deleteDialogRef = useRef<HTMLDialogElement>(null);
     const cancelDeleteRef = useRef<HTMLButtonElement>(null);
     const decryptionRequest = useRef(0);
@@ -94,6 +97,15 @@ export const Feed = () => {
         }
     };
 
+    const handleLegacyUnlock = async (event: React.FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        if (!previousVaultKey || unlockingLegacy) return;
+        setUnlockingLegacy(true); setLegacyUnlockError('');
+        try { await unlockLegacyChanges(previousVaultKey); setPreviousVaultKey(''); }
+        catch (error: unknown) { setLegacyUnlockError(getErrorMessage(error, 'Could not unlock older saved changes.')); }
+        finally { setUnlockingLegacy(false); }
+    };
+
     return (
         <div className="px-4 py-6 space-y-6">
             {importOpen && <ImportQuotes onClose={() => setImportOpen(false)} />}
@@ -129,6 +141,11 @@ export const Feed = () => {
                 {pendingCount > 0 ? `${pendingCount} change${pendingCount === 1 ? '' : 's'} waiting to sync.` : initialFetchPending ? 'Syncing quotes…' : `Last synced ${new Date(lastSyncedAt as string).toLocaleTimeString()}.`}
             </p>}
             {syncError && <p role="alert" className="rounded-xl border border-orange-500/20 bg-orange-500/10 p-3 text-sm text-orange-200">{syncError}</p>}
+            {legacyConversionRequired && <form onSubmit={handleLegacyUnlock} className="flex flex-wrap items-end gap-3 rounded-xl border border-orange-500/20 bg-orange-500/5 p-3">
+                <div className="min-w-56 flex-1"><label htmlFor="previous-vault-key" className="block text-sm text-orange-100">Previous group vault key</label><input id="previous-vault-key" type="password" autoComplete="current-password" required value={previousVaultKey} onChange={event => setPreviousVaultKey(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 p-2 text-white" /></div>
+                <button type="submit" disabled={unlockingLegacy} className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{unlockingLegacy ? 'Converting…' : 'Convert saved changes'}</button>
+                {legacyUnlockError && <p role="alert" className="w-full text-sm text-red-300">{legacyUnlockError}</p>}
+            </form>}
             {syncErrors && syncErrors.length > 0 && <div className="space-y-2" role="status">
                 {syncErrors.map((error) => <div key={error.operation_id} className="flex items-center justify-between gap-3 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
                     <span>{error.status === 'blocked' ? (error.error || 'This older quote must be re-added after unlocking the current vault.') : (error.error || 'This quote could not be synchronized.')}</span>

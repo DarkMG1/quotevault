@@ -31,9 +31,9 @@ export interface PasskeyRestoreDevice { deviceId: string; generation: string; pr
 
 export async function getPasskeyRestoreDevices(): Promise<PasskeyRestoreDevice[]> {
     const response = exact(await rpc('get_passkey_restore_devices', {}), ['generation', 'devices'], 'Invalid passkey restore response.');
-    const currentGeneration = generation(response.generation);
+    generation(response.generation);
     if (!Array.isArray(response.devices)) fail('Invalid passkey restore response.');
-    return (response.devices as unknown[]).map(value => { const data = exact(value, ['device_id', 'protection_mode', 'protection', 'public_key_fingerprint', 'encrypted_private_bundle'], 'Invalid passkey restore response.'); if (data.protection_mode !== 'passkey-prf') fail('Invalid passkey restore response.'); b64urlBytes(data.public_key_fingerprint, 32); return { deviceId: uuid(data.device_id, 'Invalid passkey restore response.'), generation: currentGeneration, protection: protection(data.protection) as unknown as PasskeyProtection, publicKeyFingerprint: data.public_key_fingerprint as string, encryptedPrivateBundle: envelope(data.encrypted_private_bundle) }; });
+    return (response.devices as unknown[]).map(value => { const data = exact(value, ['device_id', 'protection_mode', 'protection', 'public_key_fingerprint', 'encrypted_private_bundle', 'generation'], 'Invalid passkey restore response.'); if (data.protection_mode !== 'passkey-prf') fail('Invalid passkey restore response.'); b64urlBytes(data.public_key_fingerprint, 32); return { deviceId: uuid(data.device_id, 'Invalid passkey restore response.'), generation: generation(data.generation), protection: protection(data.protection) as unknown as PasskeyProtection, publicKeyFingerprint: data.public_key_fingerprint as string, encryptedPrivateBundle: envelope(data.encrypted_private_bundle) }; });
 }
 
 const lease = (value: unknown): DeviceLease => { const data = exact(value, ['version', 'claims', 'signature'], 'Invalid device lease.'); if (data.version !== 1 || !Array.isArray(data.claims) || data.claims.length !== 7 || typeof data.signature !== 'string') fail('Invalid device lease.'); b64(data.signature, 1, Number.MAX_SAFE_INTEGER); return { version: 1, claims: data.claims as DeviceLease['claims'], signature: data.signature as string }; };
@@ -45,8 +45,8 @@ export async function renewDeviceLease(input: { accountId: string; deviceId: str
 }
 
 /** A completion response keeps only a lease already verified and saved locally. */
-export async function renewThenCompleteDevice(input: { accountId: string; deviceId: string; token: string; generation: string; publicKeyFingerprint: string; rememberedKey?: CryptoKey }): Promise<DeviceLocalState> {
-    await renewDeviceLease(input);
+export async function renewThenCompleteDevice(input: { accountId: string; deviceId: string; token: string; generation: string; leaseGeneration?: string; publicKeyFingerprint: string; rememberedKey?: CryptoKey }): Promise<DeviceLocalState> {
+    await renewDeviceLease({ ...input, generation: input.leaseGeneration ?? input.generation });
     return completeDevice(input.accountId, input.deviceId, input.token, input.rememberedKey, input.generation);
 }
 

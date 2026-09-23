@@ -261,3 +261,20 @@ test('Sync now is visible and manual retries retain encrypted changes until ackn
   await expect.poll(() => localRows(page, 'syncQueue').then(rows => rows.length)).toBe(0);
   await expect(page.getByText(/Last synced/)).toBeVisible();
 });
+
+test('the service worker caches app assets but never vault or authentication responses', async ({ page }) => {
+  await prepareDevice(page);
+  const cached = await page.evaluate(async () => {
+    const keys = await caches.keys();
+    return (await Promise.all(keys.map(async key => (await caches.open(key)).keys())))
+      .flat().map(request => request.url);
+  });
+  expect(cached.length).toBeGreaterThan(0);
+  const origin = new URL(page.url()).origin;
+  for (const value of cached) {
+    const url = new URL(value);
+    expect(url.origin).toBe(origin);
+    expect(url.pathname).not.toMatch(/^\/(?:auth|rest|functions)\/v1\//);
+    expect(url.pathname).not.toMatch(/^\/fixture\//);
+  }
+});

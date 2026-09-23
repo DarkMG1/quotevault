@@ -97,6 +97,9 @@ export async function getPendingEnvelopeMigration(deviceId: string | null, token
 export async function abandonEnvelopeMigration(migrationId: string, deviceId: string | null, token: string | null): Promise<void> {
     await rpc('abandon_envelope_migration', { p_migration_id: validUuid(migrationId, 'ID'), p_device_id: deviceId === null ? null : validUuid(deviceId, 'device ID'), p_device_token: token });
 }
+export async function rollbackEnvelopeMigration(migrationId: string, deviceId: string, token: string): Promise<void> {
+    await rpc('rollback_envelope_migration', { p_migration_id: validUuid(migrationId, 'ID'), p_device_id: validUuid(deviceId, 'device ID'), p_token: token });
+}
 
 export interface EnvelopeMigrationCoverage {
     migrationId: string; status: MigrationStatus; sourceGeneration: string; targetGeneration: string; expectedQuoteCount: number; stagedQuoteCount: number; queueReportMaxAgeSeconds: number; ready: boolean;
@@ -113,12 +116,13 @@ export async function getEnvelopeMigrationCoverage(migrationId: string, deviceId
     }) : [];
     return { migrationId: migration.migrationId, status: migration.status, sourceGeneration: validUuid(stringResponse(data.source_generation, 'source generation'), 'source generation'), targetGeneration: validUuid(stringResponse(data.target_generation, 'target generation'), 'target generation'), expectedQuoteCount: integer(data.expected_quote_count, 'expected quote count'), stagedQuoteCount: integer(data.staged_quote_count, 'staged quote count'), queueReportMaxAgeSeconds: integer(data.queue_report_max_age_seconds, 'queue report age'), ready: data.ready === true, members };
 }
-export async function refreshEnvelopeMigrationSource(migrationId: string, sourceRevision: number, deviceId: string, token: string): Promise<{ migrationId: string; status: MigrationStatus; sourceGeneration: string; sourceRevision: number; expectedQuoteCount: number }> {
+export async function refreshEnvelopeMigrationSource(migrationId: string, sourceRevision: number, deviceId: string, token: string): Promise<{ migrationId: string; status: MigrationStatus; sourceGeneration: string; sourceRevision: number; expectedQuoteCount: number; reset: boolean }> {
     if (!Number.isSafeInteger(sourceRevision) || sourceRevision < 0) throw new Error('Invalid migration source revision.');
     const data = objectResponse(await rpc('refresh_envelope_migration_source', { p_migration_id: validUuid(migrationId, 'ID'), p_source_revision: sourceRevision, p_device_id: validUuid(deviceId, 'device ID'), p_token: token }), 'migration source refresh');
     const migration = migrationResponse(data, migrationId); const expectedQuoteCount = data.expected_quote_count;
     if (!Number.isSafeInteger(expectedQuoteCount) || Number(expectedQuoteCount) < 0) throw new Error('Invalid migration expected quote count.');
-    return { migrationId: migration.migrationId, status: migration.status, sourceGeneration: validUuid(stringResponse(data.source_generation, 'source generation'), 'source generation'), sourceRevision: Number(data.source_revision), expectedQuoteCount: Number(expectedQuoteCount) };
+    if (typeof data.reset !== 'boolean') throw new Error('Invalid migration source refresh result.');
+    return { migrationId: migration.migrationId, status: migration.status, sourceGeneration: validUuid(stringResponse(data.source_generation, 'source generation'), 'source generation'), sourceRevision: Number(data.source_revision), expectedQuoteCount: Number(expectedQuoteCount), reset: data.reset };
 }
 export async function reportEnvelopeMigrationEmptyQueue(migrationId: string, sourceRevision: number, deviceId: string, token: string): Promise<{ migrationId: string; status: MigrationStatus; deviceId: string; reportedAt: string; ready: boolean }> {
     if (!Number.isSafeInteger(sourceRevision) || sourceRevision < 0) throw new Error('Invalid migration source revision.');
@@ -145,24 +149,26 @@ async function resolveContext(input: EnvelopeMigrationInput, exactSource: boolea
     const sourceGeneration = validUuid(input.sourceGeneration, 'source generation'); const actorId = validUuid(input.actorId, 'actor ID');
     if (input.sourceRevision !== undefined && (!Number.isSafeInteger(input.sourceRevision) || input.sourceRevision < 0)) throw new Error('Invalid migration source revision.');
     if ((input.deviceId === null) !== (input.token === null)) throw new Error('Migration device authorization must include both device and token.');
-    const saved = !input.migrationId && !input.sourceQuotes ? await loadSession(actorId, sourceGeneration, input.sourceKey) : null; const pending: PendingEnvelopeMigration | null = await getPendingEnvelopeMigration(input.deviceId, input.token); let migrationId = input.migrationId ?? saved?.migrationId;
+    const saved = !input.sourceQuotes ? await loadSession(actorId, sourceGeneration, input.sourceKey) : null; const pending: PendingEnvelopeMigration | null = await getPendingEnvelopeMigration(input.deviceId, input.token); let migrationId = input.migrationId ?? saved?.migrationId;
     if (pending?.migrationId && !saved && !input.sourceQuotes) throw new Error('Resume requires the exact encrypted source snapshot from the prepared migration.');
     const source = input.sourceQuotes ? { revision: input.sourceRevision as number, quotes: input.sourceQuotes } : saved ? { revision: saved.sourceRevision, quotes: saved.sourceQuotes } : (exactSource || migrationId || pending?.migrationId) ? null : await sourceSnapshot(input);
     if (!source || !Number.isSafeInteger(source.revision)) throw new Error('Resume requires the exact encrypted source snapshot from the prepared migration.');
     const targetGeneration = validUuid(input.targetGeneration ?? saved?.targetGeneration ?? pending?.targetGeneration ?? crypto.randomUUID(), 'target generation');
     if (pending?.migrationId && pending.sourceGeneration !== sourceGeneration) throw new Error('A different migration is already prepared for this vault.');
-    if (pending?.migrationId && pending.sourceRevision !== source.revision) throw new Error('The migration source revision changed; use the downloaded snapshot.');
+    if (exactSource && pending?.migrationId && pending.sourceRevision !== source.revision) throw new Error('The migration source revision changed; stage a newly downloaded snapshot before activation.');
     if (pending?.migrationId && pending.targetGeneration !== targetGeneration) throw new Error('The migration target generation changed; resume it with its approved target key.');
     let targetMasterKey: Uint8Array<ArrayBufferLike> | null = input.targetMasterKey ?? null;
     let ownsTargetMasterKey = false;
     if (!targetMasterKey && (migrationId || pending?.migrationId || saved)) { if (!input.getApprovedTargetMasterKey) throw new Error('Resume requires the approved device wrapper for the prepared target generation.'); targetMasterKey = await input.getApprovedTargetMasterKey(targetGeneration); ownsTargetMasterKey = true; }
     if (!targetMasterKey) throw new Error('The approved target vault key is required after preparation.');
     if (!migrationId && pending?.migrationId) migrationId = pending.migrationId;
-    const targetKey = await deriveQuoteKey(targetMasterKey, targetGeneration);
-    if (!migrationId) { const prepared = migrationResponse(await rpc('prepare_envelope_migration', { p_source_generation: sourceGeneration, p_source_revision: source.revision, p_device_id: null, p_token: null, p_target_generation: targetGeneration, p_target_verifier: input.targetVerifier ?? await encryptData(JSON.stringify({ quotevault: 1 }), targetKey) })); migrationId = prepared.migrationId; }
-    validUuid(migrationId, 'migration ID');
-    await saveSession(actorId, sourceGeneration, input.sourceKey, { migrationId, targetGeneration, sourceRevision: source.revision, sourceQuotes: source.quotes });
-    return { migrationId, targetGeneration, targetMasterKey, ownsTargetMasterKey, sourceRevision: source.revision, sourceQuotes: source.quotes, pending };
+    try {
+        const targetKey = await deriveQuoteKey(targetMasterKey, targetGeneration);
+        if (!migrationId) { const prepared = migrationResponse(await rpc('prepare_envelope_migration', { p_source_generation: sourceGeneration, p_source_revision: source.revision, p_device_id: null, p_token: null, p_target_generation: targetGeneration, p_target_verifier: input.targetVerifier ?? await encryptData(JSON.stringify({ quotevault: 1 }), targetKey) })); migrationId = prepared.migrationId; }
+        validUuid(migrationId, 'migration ID');
+        await saveSession(actorId, sourceGeneration, input.sourceKey, { migrationId, targetGeneration, sourceRevision: source.revision, sourceQuotes: source.quotes });
+        return { migrationId, targetGeneration, targetMasterKey, ownsTargetMasterKey, sourceRevision: source.revision, sourceQuotes: source.quotes, pending };
+    } catch (cause) { if (ownsTargetMasterKey) targetMasterKey.fill(0); throw cause; }
 }
 export async function prepareEnvelopeMigration(input: { sourceGeneration: string; sourceRevision?: number; sourceKey: CryptoKey; sourceQuotes?: Quote[]; targetGeneration?: string; targetMasterKey: Uint8Array; actorId: string; encryptedExportConfirmed: boolean }): Promise<{ migrationId: string; targetGeneration: string; sourceRevision: number; quoteCount: number }> {
     if (!input.encryptedExportConfirmed) throw new Error('Download and keep the encrypted migration export before continuing.');
@@ -175,9 +181,12 @@ export async function prepareEnvelopeMigration(input: { sourceGeneration: string
     return { migrationId: prepared.migrationId, targetGeneration, sourceRevision: source.revision, quoteCount: source.quotes.length };
 }
 export async function runEnvelopeMigration(input: EnvelopeMigrationInput): Promise<EnvelopeMigrationStageResult> {
-    const auth = requireDeviceAuthorization(input); const context = await resolveContext(input, false); const { migrationId, targetGeneration, targetMasterKey, ownsTargetMasterKey, sourceQuotes } = context; const targetKey = await deriveQuoteKey(targetMasterKey, targetGeneration);
+    const auth = requireDeviceAuthorization(input); const context = await resolveContext(input, false); const { migrationId, targetGeneration, targetMasterKey, ownsTargetMasterKey, sourceQuotes } = context;
     try {
-        progress(input, 'staging', migrationId, 0, sourceQuotes.length, 0); await refreshEnvelopeMigrationSource(migrationId, context.sourceRevision, auth.deviceId, auth.token); const wrappers = { devices: await wrapTargets(targetMasterKey, targetGeneration, input.deviceWrappers ?? [], 'device_id'), recoveries: await wrapTargets(targetMasterKey, targetGeneration, input.recoveryWrappers ?? [], 'recovery_key_id') };
+        const targetKey = await deriveQuoteKey(targetMasterKey, targetGeneration);
+        progress(input, 'staging', migrationId, 0, sourceQuotes.length, 0); const refreshed = await refreshEnvelopeMigrationSource(migrationId, context.sourceRevision, auth.deviceId, auth.token);
+        if (refreshed.reset) return { migrationId, status: 'staging', targetGeneration, stagedQuoteCount: 0 };
+        const wrappers = { devices: await wrapTargets(targetMasterKey, targetGeneration, input.deviceWrappers ?? [], 'device_id'), recoveries: await wrapTargets(targetMasterKey, targetGeneration, input.recoveryWrappers ?? [], 'recovery_key_id') };
         const wrapperResponse = migrationResponse(await rpc('stage_envelope_wrappers', { p_migration_id: migrationId, p_device_id: auth.deviceId, p_token: auth.token, p_devices: wrappers.devices, p_recoveries: wrappers.recoveries })); let stagedQuoteCount = wrapperResponse.stagedQuoteCount; let serverStatus = wrapperResponse.status;
         for (let start = 0; start < sourceQuotes.length; start += MIGRATION_BATCH_SIZE) {
             const rows = await Promise.all(sourceQuotes.slice(start, start + MIGRATION_BATCH_SIZE).map(async sourceRow => { const payload = objectResponse(await decryptQuoteRecord(sourceRow, input.sourceKey), 'decrypted quote'); const id = validUuid(stringResponse(payload.id ?? sourceRow.id, 'quote ID'), 'quote ID'); const visible = { id, quote_date: payload.quote_date === undefined ? null : payload.quote_date as string | null, created_at: normalizeMigrationTimestamp(payload.created_at ?? sourceRow.created_at), user_id: validUuid(stringResponse(payload.user_id ?? sourceRow.user_id, 'quote owner'), 'quote owner'), vault_generation: targetGeneration, author: 'ENCRYPTED', context: 'ENCRYPTED' }; return await encryptQuoteRecord(privateFields(payload), visible, targetKey) as unknown as Quote; }));
@@ -187,8 +196,9 @@ export async function runEnvelopeMigration(input: EnvelopeMigrationInput): Promi
     } finally { if (ownsTargetMasterKey) targetMasterKey.fill(0); }
 }
 export async function activateEnvelopeMigration(input: EnvelopeMigrationInput): Promise<EnvelopeMigrationResult> {
-    const context = await resolveContext(input, true); const auth = requireDeviceAuthorization(input); const { migrationId, targetGeneration, targetMasterKey, ownsTargetMasterKey, sourceQuotes } = context; const targetKey = await deriveQuoteKey(targetMasterKey, targetGeneration); let activated = context.pending?.status === 'activated-maintenance';
+    const context = await resolveContext(input, true); const auth = requireDeviceAuthorization(input); const { migrationId, targetGeneration, targetMasterKey, ownsTargetMasterKey, sourceQuotes } = context; let activated = context.pending?.status === 'activated-maintenance';
     try {
+        const targetKey = await deriveQuoteKey(targetMasterKey, targetGeneration);
         if (!activated) { await rpc('activate_envelope_migration', { p_migration_id: migrationId, p_device_id: auth.deviceId, p_token: auth.token }); activated = true; }
         progress(input, 'activated-maintenance', migrationId, sourceQuotes.length, sourceQuotes.length, 0); const snapshot = objectResponse(await rpc('get_envelope_migration_snapshot', { p_migration_id: migrationId, p_device_id: auth.deviceId, p_token: auth.token }), 'migration snapshot');
         if (snapshot.generation !== targetGeneration || !Array.isArray(snapshot.quotes) || snapshot.quotes.length !== sourceQuotes.length) throw new Error('Migration verification failed: record count or generation changed.');

@@ -1,5 +1,6 @@
 import { db } from './db';
 import { supabase } from './supabase';
+import { decryptQuoteRecord, encryptQuoteRecord } from './quote-crypto';
 import type { Quote, SyncQueueItem } from '../types';
 
 export interface SyncContext {
@@ -10,8 +11,19 @@ export interface SyncContext {
     renewLease?: (authorization: DeviceAuthorization) => Promise<void>;
     onGenerationMismatch?: () => void;
     reportMigrationEmptyQueue?: (revision: number) => Promise<void>;
+    getConversionQuoteKey?: (sourceGeneration: string) => Promise<CryptoKey>;
+    acknowledgeConversion?: (sourceGeneration: string) => Promise<void>;
 }
 export interface DeviceAuthorization { deviceId: string; token: string }
+
+export interface QueueConversionContext {
+    actorId: string;
+    generation: string;
+    currentKey: CryptoKey;
+    getSourceKey: (sourceGeneration: string) => Promise<CryptoKey>;
+    acknowledgeSource?: (sourceGeneration: string) => Promise<void>;
+    isActive?: () => boolean;
+}
 
 const revisionKey = (actorId: string, generation: string) => `sync-revision:${actorId}:${generation}`;
 // The RPC rejects a JSON operation list over 1 MiB. Leave room for the RPC's
@@ -91,6 +103,107 @@ export function createSyncOperation(action: 'INSERT' | 'DELETE', quote: Quote, a
     };
 }
 
+const quotePrivateFields = (payload: Record<string, unknown>) => {
+    const copy = { ...payload };
+    for (const field of ['id', 'vault_generation', 'user_id', 'created_at', 'quote_date']) delete copy[field];
+    return copy;
+};
+const conversionAckKey = (actorId: string, generation: string, sourceGeneration: string) =>
+    `conversion-ack:${actorId}:${generation}:${sourceGeneration}`;
+
+const sameQueueItem = (left: SyncQueueItem, right: SyncQueueItem) =>
+    JSON.stringify(left) === JSON.stringify(right);
+
+/**
+ * Re-encrypts old-generation local work without ever sending an old-generation
+ * operation to the server. The source key is caller-owned and remains in this
+ * function's memory only.
+ */
+export async function convertQueuedOperations(context: QueueConversionContext): Promise<number> {
+    if (!context.actorId || !context.generation || !context.currentKey) throw new Error('Current vault encryption is unavailable.');
+    const queued = (await db.syncQueue.toArray()).filter(item =>
+        item.actor_id === context.actorId && item.vault_generation && item.vault_generation !== context.generation && item.status !== 'rejected'
+    );
+    const ackPrefix = `conversion-ack:${context.actorId}:${context.generation}:`;
+    const savedAcks = context.acknowledgeSource
+        ? (await db.metadata.toArray()).filter(item => item.id.startsWith(ackPrefix)).map(item => String(item.value))
+        : [];
+    if (!queued.length && !savedAcks.length) return 0;
+    const sourceKeys = new Map<string, CryptoKey>();
+    let converted = 0;
+    try {
+        for (const original of queued) {
+            if (context.acknowledgeSource) await db.metadata.put({ id: conversionAckKey(context.actorId, context.generation, original.vault_generation!), value: original.vault_generation! });
+            if (context.isActive && !context.isActive()) throw new Error('Vault access changed; retry conversion after unlocking.');
+            const sourceGeneration = original.vault_generation!;
+            let replacement: SyncQueueItem;
+            if (original.action === 'INSERT') {
+                if (!original.payload) throw new Error('An older queued quote is missing its encrypted payload.');
+                let sourceKey = sourceKeys.get(sourceGeneration);
+                if (!sourceKey) {
+                    sourceKey = await context.getSourceKey(sourceGeneration);
+                    sourceKeys.set(sourceGeneration, sourceKey);
+                }
+                const payload = await decryptQuoteRecord(original.payload, sourceKey);
+                if (!payload || typeof payload !== 'object' || typeof payload.id !== 'string' || payload.id !== original.quote_id ||
+                    payload.vault_generation !== sourceGeneration || typeof payload.user_id !== 'string' || typeof payload.created_at !== 'string') {
+                    throw new Error('The older queued quote is invalid.');
+                }
+                const visible = {
+                    id: original.quote_id,
+                    quote_date: payload.quote_date === undefined ? null : payload.quote_date as string | null,
+                    created_at: payload.created_at,
+                    user_id: payload.user_id,
+                    vault_generation: context.generation,
+                };
+                const encrypted = await encryptQuoteRecord(quotePrivateFields(payload), visible, context.currentKey) as unknown as Quote;
+                replacement = {
+                    ...original,
+                    id: original.id, operation_id: original.operation_id,
+                    vault_generation: context.generation, status: 'pending', error: undefined,
+                    payload: { ...encrypted, author: 'ENCRYPTED', context: 'ENCRYPTED', sync_status: 'pending' } as Quote,
+                };
+            } else if (original.action === 'DELETE') {
+                replacement = {
+                    ...original,
+                    id: original.id, operation_id: original.operation_id,
+                    vault_generation: context.generation, status: 'pending', error: undefined, payload: undefined,
+                };
+            } else {
+                continue;
+            }
+            if (context.isActive && !context.isActive()) throw new Error('Vault access changed; retry conversion after unlocking.');
+            const replacementId = crypto.randomUUID();
+            replacement.id = replacementId;
+            replacement.operation_id = replacementId;
+            await db.transaction('rw', db.quotes, db.syncQueue, async () => {
+                if (context.isActive && !context.isActive()) throw new Error('Vault access changed; retry conversion after unlocking.');
+                const current = await db.syncQueue.get(original.id);
+                if (!current) return;
+                if (!sameQueueItem(current, original)) throw new Error('Queued work changed while it was being converted. Retry conversion.');
+                await db.syncQueue.put(replacement);
+                if (replacement.action === 'INSERT' && replacement.payload) await db.quotes.put(replacement.payload);
+                if (replacement.action === 'DELETE') await db.quotes.delete(replacement.quote_id);
+                await db.syncQueue.delete(original.id);
+                converted++;
+            });
+        }
+    } finally {
+        sourceKeys.clear();
+    }
+    if (context.acknowledgeSource) {
+        const remaining = new Set((await db.syncQueue.toArray())
+            .filter(item => item.actor_id === context.actorId && item.vault_generation && item.vault_generation !== context.generation)
+            .map(item => item.vault_generation!));
+        for (const sourceGeneration of new Set([...queued.map(item => item.vault_generation!), ...savedAcks])) {
+            if (remaining.has(sourceGeneration)) continue;
+            await context.acknowledgeSource(sourceGeneration);
+            await db.metadata.delete(conversionAckKey(context.actorId, context.generation, sourceGeneration));
+        }
+    }
+    return converted;
+}
+
 export async function enqueueDeleteMutation(quote: Quote, context: SyncContext) {
     const operation = createSyncOperation('DELETE', quote, context.actorId, context.generation);
     await db.transaction('rw', db.quotes, db.syncQueue, async () => {
@@ -150,7 +263,7 @@ async function rejectStaleGeneration(context: SyncContext, epoch: number) {
         if (epoch !== syncEpoch) return;
         await db.quotes.clear();
         const stale = (await db.syncQueue.toArray()).filter(item => item.vault_generation === context.generation);
-        await db.syncQueue.bulkDelete(stale.map(item => item.id));
+        for (const item of stale) await db.syncQueue.update(item.id, { status: 'blocked', error: 'Vault encryption changed. Convert this saved change after unlocking the current vault.' });
     });
     if (epoch === syncEpoch) context.onGenerationMismatch?.();
 }
@@ -264,7 +377,7 @@ async function syncBatch(context: SyncContext, epoch: number, authorization: Dev
         if (activeAbortController === controller) activeAbortController = null;
     }
     if (error) { const message = typeof (error as { message?: unknown }).message === 'string' ? (error as { message: string }).message : 'Unable to synchronize. Changes remain on this device.'; throw Object.assign(new Error(message), error, { status }); }
-    if (data === null) throw Object.assign(new Error('Device authorization was denied. Unlock this device and retry synchronization.'), { code: '42501', status: 403 });
+    if (data === null) { context.onGenerationMismatch?.(); throw Object.assign(new Error('Device authorization was denied. Unlock this device and retry synchronization.'), { code: '42501', status: 403 }); }
     if (epoch !== syncEpoch) return { more: false, performed: true, revision: 0 };
     const sentIds = new Set(operations.map(operation => operation.operation_id));
     if (!validResponse(data, sentIds)) throw new Error('Invalid sync response.');
@@ -318,7 +431,8 @@ async function sync(context: SyncContext, epoch: number) {
         performed ||= result.performed;
         revision = result.revision;
         if (!result.more && request === syncRequest) {
-            if (performed && authorization && context.reportMigrationEmptyQueue) await context.reportMigrationEmptyQueue(revision);
+            const queueEmpty = !(await db.syncQueue.toArray()).some(item => item.actor_id === context.actorId && item.vault_generation === context.generation);
+            if (performed && queueEmpty && authorization && context.reportMigrationEmptyQueue) await context.reportMigrationEmptyQueue(revision);
             if (performed && authorization && context.renewLease) await context.renewLease(authorization);
             return performed;
         }

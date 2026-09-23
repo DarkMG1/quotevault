@@ -41,6 +41,7 @@ begin
   if legacy_migration->>'status'<>'staging' or (select initiating_device_id from public.vault_migrations where id=(legacy_migration->>'migration_id')::uuid) is not null
      or (select envelope_status from public.vault_state where singleton)<>'preparing' then raise exception 'legacy prepare required a device or did not prepare'; end if;
   if public.get_pending_envelope_migration(null,null)->>'migration_id'<>legacy_migration->>'migration_id' then raise exception 'device-less legacy pending status was unavailable'; end if;
+  if public.sync_quotes(source_generation,source_revision,'[]'::jsonb,null,null) is null then raise exception 'preparing blocked legacy device-less sync'; end if;
   response:=public.request_device('23232323-2323-4232-8232-232323232323',member_id,'member bootstrap',bootstrap_jwk,token,bootstrap_fingerprint,rtrim(replace(replace(replace(encode(sha256(decode(token||'=', 'base64')),'base64'),E'\n',''),'+','-'),'/','_'),'='),'remembered','{"version":1,"mode":"remembered"}'::jsonb,bootstrap_bundle,'first');
   begin
     perform public.approve_device((response->>'request_id')::uuid,member_id,bootstrap_fingerprint,token,repeat('A',512),(legacy_migration->>'target_generation')::uuid,null,null);
@@ -49,6 +50,11 @@ begin
   end;
   delete from public.vault_devices where id='23232323-2323-4232-8232-232323232323';
   response:=public.request_device('21212121-2121-4212-8212-212121212121',admin_id,'admin bootstrap',bootstrap_jwk,token,bootstrap_fingerprint,rtrim(replace(replace(replace(encode(sha256(decode(token||'=', 'base64')),'base64'),E'\n',''),'+','-'),'/','_'),'='),'remembered','{"version":1,"mode":"remembered"}'::jsonb,bootstrap_bundle,'first');
+  begin
+    perform public.approve_device((response->>'request_id')::uuid,admin_id,bootstrap_fingerprint,token,repeat('A',512),source_generation,null,null);
+    raise exception 'null bootstrap approved a source-generation wrapper';
+  exception when sqlstate '42501' then null;
+  end;
   response:=public.approve_device((response->>'request_id')::uuid,admin_id,bootstrap_fingerprint,token,repeat('A',512),(legacy_migration->>'target_generation')::uuid,null,null);
   if response->>'status'<>'approved' then raise exception 'own admin first bootstrap device was rejected'; end if;
   delete from public.vault_devices where id='21212121-2121-4212-8212-212121212121';
@@ -81,7 +87,7 @@ begin
   on conflict (id) do update set status='active', confirmed_at=excluded.confirmed_at;
   update public.vault_state set envelope_status='active' where singleton;
   insert into public.quotes(id,text,author,context,quote_date,created_at,user_id,vault_generation)
-  values (quote_id,cipher,'ENCRYPTED','ENCRYPTED',current_date,'2026-09-22T12:34:56.123456Z',admin_id,source_generation)
+  values (quote_id,cipher,'ENCRYPTED','ENCRYPTED',null,'2026-09-22T12:34:56.123456Z',admin_id,source_generation)
   on conflict (id) do update set text=excluded.text, vault_generation=excluded.vault_generation;
   source_revision := (select revision from public.vault_state where singleton);
   perform set_config('request.jwt.claim.sub',admin_id::text,true);
@@ -161,7 +167,7 @@ begin
      or (select count(*) from public.vault_state where singleton and active_migration_id is null and prepared_generation is null) <> 1 then raise exception 'migration abandonment was not atomic: %',(select to_jsonb(v) from public.vault_state v where singleton); end if;
   migration := public.prepare_envelope_migration(source_generation,source_revision,admin_device,token,target_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
   if migration is null or (select envelope_status from public.vault_state where singleton) <> 'preparing' then raise exception 'prepare did not preserve preparing'; end if;
-  row := jsonb_build_object('id',quote_id,'text',cipher,'author','ENCRYPTED','context','ENCRYPTED','quote_date',current_date::text,'created_at','2026-09-22T12:34:56.123456Z','user_id',admin_id,'vault_generation',target_generation);
+  row := jsonb_build_object('id',quote_id,'text',cipher,'author','ENCRYPTED','context','ENCRYPTED','quote_date',null,'created_at','2026-09-22T12:34:56.123456Z','user_id',admin_id,'vault_generation',target_generation);
   begin
     perform public.stage_envelope_quotes((migration->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{text}',to_jsonb('$$E2E$${"version":1,"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::text))));
     raise exception 'malformed v2 target was staged';
@@ -200,6 +206,10 @@ begin
   perform public.stage_envelope_wrappers((migration->>'migration_id')::uuid,admin_device,token,
     jsonb_build_array(jsonb_build_object('device_id',admin_device,'wrapped_key',repeat('A',512)),jsonb_build_object('device_id',member_device,'wrapped_key',repeat('A',512))),
     jsonb_build_array(jsonb_build_object('recovery_key_id',recovery_id,'wrapped_key',repeat('A',512)),jsonb_build_object('recovery_key_id',admin_recovery_id,'wrapped_key',repeat('A',512))));
+  update public.vault_devices set protection_mode='passkey-prf',protection=jsonb_build_object('version',1,'rpId','quotes.darkmg1.dev','credentialId',token,'prfSalt',token,'kdf','HKDF-SHA-256') where id=admin_device;
+  response:=public.get_passkey_restore_devices();
+  if response->>'generation'<>target_generation::text or response::text not like '%'||admin_device::text||'%' then raise exception 'cleared-browser passkey restore omitted its prepared wrapper'; end if;
+  update public.vault_devices set protection_mode='remembered',protection='{"version":1,"mode":"remembered"}'::jsonb where id=admin_device;
   snapshot:=public.get_envelope_migration_coverage((migration->>'migration_id')::uuid,admin_device,token);
   if snapshot::text like '%wrapped_key%' or snapshot::text like '%encrypted_private%' or snapshot::text not like '%no_recent_empty_queue%' then raise exception 'pre-sync coverage leaked secrets or omitted queue blocker'; end if;
   begin
@@ -326,8 +336,11 @@ begin
   end;
   perform set_config('request.jwt.claim.sub',admin_id::text,true);
   if public.edit_quote(target_generation,quote_id,cipher,cipher,current_date,admin_device,token) is not null
-     or public.checked_import(target_generation,0,'[]'::jsonb,admin_device,token) is not null
-     or public.renew_device_lease(admin_device,token) is not null then raise exception 'maintenance permitted active mutations'; end if;
+     or public.checked_import(target_generation,0,'[]'::jsonb,admin_device,token) is not null then raise exception 'maintenance permitted active mutations'; end if;
+  response:=public.renew_device_lease(admin_device,token);
+  if response is null or response->>3<>target_generation::text then raise exception 'maintenance reload could not renew its target-generation device'; end if;
+  response:=public.complete_device(admin_device,token,target_generation);
+  if response->>'generation'<>target_generation::text or response->>'wrapped_key'<>repeat('A',512) then raise exception 'maintenance reload could not fetch its target wrapper'; end if;
   begin
     update public.quotes set text='$$E2E$${"version":2,"iv":"AAAAAAAAAAAAAAAA","data":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="}' where id=quote_id;
     perform public.finalize_envelope_migration((migration->>'migration_id')::uuid,admin_device,token);

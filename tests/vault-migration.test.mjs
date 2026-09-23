@@ -56,8 +56,8 @@ test('stages encrypted quote batches and verifies every private field before fin
   const rpc = async (name, args) => {
     calls.push({ name, args });
     if (name === 'get_pending_envelope_migration') return response(null);
-    if (name === 'prepare_envelope_migration') return response({ migration_id: DEVICE, status: 'staging', expected_quote_count: sourceQuotes.length });
-    if (name === 'refresh_envelope_migration_source') return response({ migration_id: DEVICE, status: 'staging', source_generation: SOURCE_GENERATION, source_revision: 7, expected_quote_count: sourceQuotes.length });
+    if (name === 'prepare_envelope_migration') return response({ migration_id: DEVICE, status: 'staging', expected_quote_count: sourceQuotes.length, reset: false });
+    if (name === 'refresh_envelope_migration_source') return response({ migration_id: DEVICE, status: 'staging', source_generation: SOURCE_GENERATION, source_revision: 7, expected_quote_count: sourceQuotes.length, reset: false });
     if (name === 'stage_envelope_wrappers') return response({ migration_id: DEVICE, status: 'staging' });
     if (name === 'stage_envelope_quotes') { targetRows.push(...args.p_rows); return response({ migration_id: DEVICE, status: targetRows.length === sourceQuotes.length ? 'ready' : 'staging', staged_quote_count: targetRows.length }); }
     if (name === 'activate_envelope_migration') return response({ migration_id: DEVICE, status: 'activated', generation: TARGET_GENERATION });
@@ -106,8 +106,8 @@ test('keeps resumable migration rows and rolls back when post-activation verific
   const rpc = async (name, args) => {
     calls.push({ name, args });
     if (name === 'get_pending_envelope_migration') return activatedStatus ? response({ migration_id: DEVICE, status: 'activated', source_generation: SOURCE_GENERATION, target_generation: TARGET_GENERATION, source_revision: 7, expected_quote_count: sourceQuotes.length, staged_quote_count: staged.length }) : response(null);
-    if (name === 'prepare_envelope_migration') return response({ migration_id: DEVICE, status: 'staging', expected_quote_count: sourceQuotes.length });
-    if (name === 'refresh_envelope_migration_source') return response({ migration_id: DEVICE, status: 'staging', source_generation: SOURCE_GENERATION, source_revision: 7, expected_quote_count: sourceQuotes.length });
+    if (name === 'prepare_envelope_migration') return response({ migration_id: DEVICE, status: 'staging', expected_quote_count: sourceQuotes.length, reset: false });
+    if (name === 'refresh_envelope_migration_source') return response({ migration_id: DEVICE, status: 'staging', source_generation: SOURCE_GENERATION, source_revision: 7, expected_quote_count: sourceQuotes.length, reset: false });
     if (name === 'stage_envelope_wrappers') return response({ migration_id: DEVICE, status: 'staging' });
     if (name === 'stage_envelope_quotes') { staged.push(...args.p_rows); return response({ migration_id: DEVICE, status: staged.length === sourceQuotes.length ? 'ready' : 'staging', staged_quote_count: staged.length }); }
     if (name === 'activate_envelope_migration') return response({ migration_id: DEVICE, status: 'activated', generation: TARGET_GENERATION });
@@ -162,7 +162,7 @@ test('prepares an empty vault without staging an empty quote batch', async () =>
     calls.push({ name, args });
     if (name === 'get_pending_envelope_migration') return response(null);
     if (name === 'prepare_envelope_migration') return response({ migration_id: DEVICE, status: 'prepared', staged_quote_count: 0 });
-    if (name === 'refresh_envelope_migration_source') return response({ migration_id: DEVICE, status: 'staging', source_generation: SOURCE_GENERATION, source_revision: 4, expected_quote_count: 0 });
+    if (name === 'refresh_envelope_migration_source') return response({ migration_id: DEVICE, status: 'staging', source_generation: SOURCE_GENERATION, source_revision: 4, expected_quote_count: 0, reset: false });
     if (name === 'stage_envelope_wrappers') return response({ migration_id: DEVICE, status: 'ready', staged_quote_count: 0 });
     throw new Error(`unexpected RPC ${name}`);
   };
@@ -173,4 +173,24 @@ test('prepares an empty vault without staging an empty quote batch', async () =>
   const staged = await migration.runEnvelopeMigration({ sourceGeneration: SOURCE_GENERATION, sourceRevision: 4, sourceKey, sourceQuotes: [], targetGeneration: TARGET_GENERATION, targetMasterKey, migrationId: DEVICE, deviceId: DEVICE, token: 'transient-device-token', actorId: ACTOR, encryptedExportConfirmed: true });
   assert.equal(staged.status, 'ready');
   assert.equal(calls.filter(call => call.name === 'stage_envelope_quotes').length, 0);
+});
+
+test('refreshes a changed source before staging and waits for new device reports', async () => {
+  const sourceKey = await cryptoApi.deriveEncryptionKey('changed-migration-source');
+  const targetMasterKey = deviceCrypto.generateVaultMasterKey();
+  const sourceQuotes = [await fixture(sourceKey, 0)];
+  const calls = [];
+  const rpc = async (name, args) => {
+    calls.push({ name, args });
+    if (name === 'get_pending_envelope_migration') return response({ migration_id: DEVICE, status: 'ready', source_generation: SOURCE_GENERATION, target_generation: TARGET_GENERATION, source_revision: 6, expected_quote_count: 0, staged_quote_count: 0 });
+    if (name === 'refresh_envelope_migration_source') return response({ migration_id: DEVICE, status: 'staging', source_generation: SOURCE_GENERATION, source_revision: 7, expected_quote_count: 1, reset: true });
+    throw new Error(`unexpected RPC ${name}`);
+  };
+  const migration = loadMigration(rpc);
+  const result = await migration.runEnvelopeMigration({ sourceGeneration: SOURCE_GENERATION, sourceRevision: 7, sourceQuotes, sourceKey, targetGeneration: TARGET_GENERATION, targetMasterKey, migrationId: DEVICE, deviceId: DEVICE, token: 'transient-device-token', actorId: ACTOR, encryptedExportConfirmed: true });
+  assert.equal(result.migrationId, DEVICE);
+  assert.equal(result.status, 'staging');
+  assert.equal(result.targetGeneration, TARGET_GENERATION);
+  assert.equal(result.stagedQuoteCount, 0);
+  assert.equal(calls.some(call => call.name === 'stage_envelope_wrappers' || call.name === 'stage_envelope_quotes'), false);
 });

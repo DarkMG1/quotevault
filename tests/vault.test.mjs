@@ -89,9 +89,46 @@ test('legacy vault mutation responses normalize only the known pre-union shape',
   assert.throws(() => app.parseLegacyVaultMutation({ ...mutation, prepared_generation: null }), /Invalid/);
 });
 
-test('preparing vaults keep quote generation on legacy and enroll devices on prepared generation', () => {
+test('initial legacy preparation keeps the source generation and target enrollment generation', () => {
   const app = setup();
   const preparing = app.parseVaultState({ ...state, envelope_status: 'preparing', prepared_generation: '22222222-2222-4222-8222-222222222222' });
+  assert.equal(app.isLegacyVaultState(preparing), true);
   assert.equal(app.quoteGeneration(preparing), state.generation);
   assert.equal(app.enrollmentGeneration(preparing), preparing.prepared_generation);
+});
+
+test('retained rotation preparation is an envelope state without legacy key metadata', () => {
+  const app = setup();
+  const preparing = app.parseVaultState({ envelope_status: 'preparing', generation: state.generation,
+    prepared_generation: '22222222-2222-4222-8222-222222222222' });
+  assert.equal(app.isLegacyVaultState(preparing), false);
+  assert.equal(app.quoteGeneration(preparing), state.generation);
+  assert.equal(app.enrollmentGeneration(preparing), preparing.prepared_generation);
+  assert.throws(() => app.parseVaultState({ ...preparing, kdf: state.kdf }), /Invalid/);
+});
+
+test('retained rotation approves a new device with the still-usable source generation', () => {
+  const app = setup();
+  const preparing = app.parseVaultState({ envelope_status: 'preparing', generation: state.generation,
+    prepared_generation: '22222222-2222-4222-8222-222222222222' });
+  assert.equal(app.approvalGeneration(preparing), state.generation);
+  assert.equal(app.approvalGeneration(app.parseVaultState({ ...state, envelope_status: 'preparing', prepared_generation: preparing.prepared_generation })), preparing.prepared_generation);
+});
+
+test('legacy conversion metadata survives cutover without storing the group key', () => {
+  const app = setup();
+  app.cacheVaultState('alice', state);
+  app.cacheVaultState('alice', { envelope_status: 'active', generation: '22222222-2222-4222-8222-222222222222', prepared_generation: null });
+  assert.equal(JSON.stringify(app.readLegacyConversionState('alice')), JSON.stringify({ generation: state.generation, kdf: state.kdf, verifier: state.verifier }));
+  assert.equal(JSON.stringify([...app.stored.values()]).includes('group vault key'), false);
+  app.clearLegacyConversionState('alice');
+  assert.equal(app.readLegacyConversionState('alice'), null);
+});
+
+test('a pre-feature legacy cache preserves conversion metadata on first active refresh', async () => {
+  const app = setup();
+  app.stored.set('quotevault:settings:alice', JSON.stringify(state));
+  app.network.result = { data: { envelope_status: 'active', generation: '22222222-2222-4222-8222-222222222222', prepared_generation: null }, error: null };
+  await app.loadVaultState('alice');
+  assert.equal(app.readLegacyConversionState('alice')?.generation, state.generation);
 });

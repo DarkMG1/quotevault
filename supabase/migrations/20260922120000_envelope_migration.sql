@@ -212,6 +212,7 @@ begin
   if public.qv_is_member() is not true then raise exception 'QuoteVault membership is required' using errcode='42501'; end if;
   select * into state from public.vault_state where singleton for update;
   if state.envelope_status='preparing' then
+    if p_device_id is null and p_device_token is null then return public.qv_sync_quotes_legacy(p_generation,p_revision,p_operations); end if;
     if public.qv_authorize_device(p_device_id,p_device_token,p_generation,'sync') is null then return null; end if;
     response:=public.qv_sync_quotes_legacy(p_generation,p_revision,p_operations);
     if response is not null then update public.vault_devices set last_sync_at=now() where id=p_device_id; end if;
@@ -320,7 +321,7 @@ begin
      or (select count(*) from public.quotes where vault_generation=migration.source_generation)<>migration.expected_quote_count or exists(select 1 from public.quotes where vault_generation<>migration.source_generation)
      or exists((select id from public.quotes where vault_generation=migration.source_generation) except (select quote_id from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='staged'))
      or exists((select quote_id from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='staged') except (select id from public.quotes where vault_generation=migration.source_generation))
-     or exists(select 1 from public.vault_migration_quote_copies c join public.quotes source on source.id=c.quote_id where c.migration_id=migration.id and c.copy_kind='staged' and ((c.encrypted_row->>'user_id') is distinct from source.user_id::text or (c.encrypted_row->>'created_at') is distinct from to_char(source.created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') or c.encrypted_row->'quote_date' is distinct from to_jsonb(source.quote_date)))
+     or exists(select 1 from public.vault_migration_quote_copies c join public.quotes source on source.id=c.quote_id where c.migration_id=migration.id and c.copy_kind='staged' and ((c.encrypted_row->>'user_id') is distinct from source.user_id::text or (c.encrypted_row->>'created_at') is distinct from to_char(source.created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') or c.encrypted_row->'quote_date' is distinct from coalesce(to_jsonb(source.quote_date),'null'::jsonb)))
      or public.qv_migration_ready(migration) is not true then raise exception 'Migration source, staged rows, or wrappers changed' using errcode='40001'; end if;
   insert into public.vault_migration_quote_copies(migration_id,copy_kind,quote_id,encrypted_row,vault_generation)
     select migration.id,'rollback',src.id,jsonb_build_object('id',src.id,'text',src.text,'author',src.author,'context',src.context,'quote_date',src.quote_date,'created_at',to_char(src.created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),'user_id',src.user_id,'vault_generation',src.vault_generation),src.vault_generation from public.quotes src where src.vault_generation=migration.source_generation order by src.id;
@@ -404,6 +405,8 @@ create or replace function public.qv_reject_maintenance_device_mutation()
 returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
 begin
   if exists(select 1 from public.vault_state where singleton and envelope_status='maintenance') then
+    if tg_table_name='vault_devices' and tg_op='UPDATE'
+       and (to_jsonb(new)-'lease_expires_at') is not distinct from (to_jsonb(old)-'lease_expires_at') then return new; end if;
     raise exception 'Vault migration verification is in progress' using errcode='40001';
   end if;
   return coalesce(new,old);
@@ -459,6 +462,9 @@ begin
   if p_approver_device_id is null and state.envelope_status='preparing' and (pending.owner_id is distinct from caller or pending.request_kind<>'first') then
     raise exception 'Bootstrap approval must be the administrator first device' using errcode='42501';
   end if;
+  if p_approver_device_id is null and p_generation is distinct from state.prepared_generation then
+    raise exception 'Bootstrap approval must use the prepared generation' using errcode='42501';
+  end if;
   if caller is distinct from pending.owner_id and public.qv_is_admin() is not true then raise exception 'Device approval is not authorized' using errcode='42501'; end if;
   if p_generation is distinct from state.generation and not(state.envelope_status='preparing' and p_generation is not distinct from state.prepared_generation) then raise exception 'Invalid enrollment generation' using errcode='40001'; end if;
   update public.vault_devices set status='active',expires_at=null,approved_by_device_id=p_approver_device_id,lease_expires_at=now()+interval '30 days' where id=pending.id;
@@ -473,12 +479,28 @@ returns jsonb language plpgsql security definer set search_path = public, pg_tem
 declare state public.vault_state%rowtype; device public.vault_devices%rowtype; caller uuid:=auth.uid(); token_bytes bytea;
 begin
   select * into state from public.vault_state where singleton for update; select * into device from public.vault_devices where id=p_device_id for update;
-  if state.envelope_status='maintenance' or not found or caller is null or device.owner_id is distinct from caller or public.qv_is_member() is not true or device.status<>'active' or p_operation not in ('state','sync','import','edit','wrapper','lease_renewal','complete','revoke') then return null; end if;
+  if not found or caller is null or device.owner_id is distinct from caller or public.qv_is_member() is not true or device.status<>'active' or p_operation not in ('state','sync','import','edit','wrapper','lease_renewal','complete','revoke')
+     or (state.envelope_status='maintenance' and p_operation not in ('state','lease_renewal','complete')) then return null; end if;
   if p_generation is distinct from state.generation and not(p_operation='complete' and state.envelope_status='preparing' and p_generation is not distinct from state.prepared_generation) then return null; end if;
   token_bytes:=public.qv_base64url_bytes(p_token,32); if token_bytes is null or rtrim(replace(replace(replace(encode(sha256(token_bytes),'base64'),E'\n',''),'+','-'),'/','_'),'=')<>device.authorization_token_digest or (p_operation<>'lease_renewal' and (device.lease_expires_at is null or device.lease_expires_at<=now())) then return null; end if;
   return jsonb_build_object('device_id',device.id,'owner_id',device.owner_id,'generation',state.generation,'lease_expires_at',device.lease_expires_at);
 exception when others then return null;
 end $auth$;
+
+-- A cleared browser may restore only devices that already have a wrapper for
+-- the generation it must unlock, including the prepared generation.
+create or replace function public.get_passkey_restore_devices()
+returns jsonb language plpgsql security definer set search_path = public, pg_temp as $restore$
+declare state public.vault_state%rowtype; target_generation uuid; devices jsonb;
+begin
+  if auth.uid() is null or public.qv_is_member() is not true then return null; end if;
+  select * into state from public.vault_state where singleton for share;
+  target_generation:=case when state.envelope_status='preparing' then state.prepared_generation else state.generation end;
+  select coalesce(jsonb_agg(jsonb_build_object('device_id',d.id,'protection_mode',d.protection_mode,'protection',d.protection,'public_key_fingerprint',d.public_key_fingerprint,'encrypted_private_bundle',d.encrypted_private_bundle) order by d.created_at),'[]'::jsonb)
+    into devices from public.vault_devices d join public.vault_device_wrappers w on w.device_id=d.id and w.generation=target_generation and w.purpose='active'
+    where d.owner_id=auth.uid() and d.status='active' and d.protection_mode='passkey-prf' and public.qv_valid_device_protection(d.protection_mode,d.protection) is true;
+  return jsonb_build_object('generation',target_generation,'devices',devices);
+end $restore$;
 
 revoke all on function public.qv_valid_migration_v2_quote(jsonb,uuid), public.qv_migration_enrollment_ready(public.vault_migrations), public.qv_migration_ready(public.vault_migrations), public.qv_migration_device_ok(uuid,text,public.vault_state) from public,anon,authenticated;
 revoke all on table public.vault_migration_queue_reports from public,anon,authenticated;

@@ -229,4 +229,15 @@ for (const [label, reply] of [
   assert.equal(deviceState.rows.size, 0);
 }
 
+{
+  const { device } = setup(() => null);
+  const old = { ...initial, wrapper: { generation: accountB, wrappedKey: wrapper } };
+  assert.equal(device.needsDeviceCompletion(old, generation), true, 'an old local wrapper must be fetched again after cutover');
+  assert.equal(device.needsDeviceCompletion({ ...old, wrapper: { ...old.wrapper, generation } }, generation), false);
+  const rotating = { ...old, preparedWrapper: { generation, wrappedKey: wrapper } };
+  assert.equal(device.needsDeviceCompletion(rotating, generation), false, 'a locally retained prepared wrapper survives rotation reload');
+  assert.equal(device.deviceWrapperForGeneration(rotating, generation), rotating.preparedWrapper);
+  assert.equal(device.deviceWrapperForGeneration(rotating, accountB), rotating.wrapper);
+}
+
 console.log('device tests passed');

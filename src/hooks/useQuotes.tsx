@@ -1,13 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
-import { cancelSyncRequests, createSyncOperation, enqueueDeleteMutation, isTransientSyncFailure, processSyncQueue, type SyncContext } from '../lib/sync';
+import { cancelSyncRequests, convertQueuedOperations, createSyncOperation, enqueueDeleteMutation, isTransientSyncFailure, processSyncQueue, type SyncContext } from '../lib/sync';
 import { supabase } from '../lib/supabase';
 import { useAuth } from './useAuth';
 import { useCrypto } from './useCrypto';
 import { encryptQuoteRecord } from '../lib/quote-crypto';
 import { isCiphertextWithinLimit } from '../components/ui';
 import type { Quote, SyncQueueItem } from '../types';
+import { LEGACY_CONVERSION_KEY_REQUIRED } from '../lib/vault';
 
 interface QuotesContextValue {
     quotes: Quote[] | undefined;
@@ -22,6 +23,8 @@ interface QuotesContextValue {
     syncError: string;
     syncErrors: SyncQueueItem[] | undefined;
     retrySyncOperation: (operationId: string) => Promise<void>;
+    legacyConversionRequired: boolean;
+    unlockLegacyChanges: (password: string) => Promise<void>;
 }
 
 const QuotesContext = createContext<QuotesContextValue | null>(null);
@@ -29,9 +32,7 @@ const activeIdentityKey = 'sync-active-identity';
 
 export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
     const { user, canSync, retry: retrySession } = useAuth();
-    const cryptoContext = useCrypto();
-    const { encryptionKey, vaultGeneration, legacyVaultGeneration, lockVault, getDeviceAuthorization, renewDeviceLease, deviceId } = cryptoContext;
-    const reportMigrationEmptyQueue = (cryptoContext as typeof cryptoContext & { reportMigrationEmptyQueue?: (revision: number) => Promise<void> }).reportMigrationEmptyQueue;
+    const { encryptionKey, vaultGeneration, legacyVaultGeneration, lockVault, getDeviceAuthorization, getConversionQuoteKey, unlockLegacyQueuedChanges, acknowledgeConversion, renewDeviceLease, reportMigrationEmptyQueue, deviceApproved } = useCrypto();
     const [initializedIdentity, setInitializedIdentity] = useState<string | null>(null);
     const [lastSync, setLastSync] = useState<{ identity: string; at: string } | null>(null);
     const [syncError, setSyncError] = useState('');
@@ -43,10 +44,12 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
     const generation = vaultGeneration;
     const context = useMemo<SyncContext | null>(() => actorId && generation ? {
         actorId, generation, legacyGeneration: legacyVaultGeneration, onGenerationMismatch: lockVault,
-        getDeviceAuthorization: deviceId ? getDeviceAuthorization : undefined,
-        renewLease: deviceId ? renewDeviceLease : undefined,
-        reportMigrationEmptyQueue: deviceId ? reportMigrationEmptyQueue : undefined,
-    } : null, [actorId, generation, legacyVaultGeneration, lockVault, getDeviceAuthorization, renewDeviceLease, deviceId, reportMigrationEmptyQueue]);
+        getDeviceAuthorization: deviceApproved ? getDeviceAuthorization : undefined,
+        getConversionQuoteKey: deviceApproved ? getConversionQuoteKey : undefined,
+        acknowledgeConversion: deviceApproved ? acknowledgeConversion : undefined,
+        renewLease: deviceApproved ? renewDeviceLease : undefined,
+        reportMigrationEmptyQueue: deviceApproved ? reportMigrationEmptyQueue : undefined,
+    } : null, [actorId, generation, legacyVaultGeneration, lockVault, getDeviceAuthorization, getConversionQuoteKey, acknowledgeConversion, renewDeviceLease, deviceApproved, reportMigrationEmptyQueue]);
     const identity = context && `${context.actorId}:${context.generation}`;
     const ready = initializedIdentity === identity;
     const loading = !ready;
@@ -133,6 +136,10 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
                 void retrySession();
                 return;
             }
+            if (encryptionKey && context.getConversionQuoteKey) {
+                await convertQueuedOperations({ actorId: context.actorId, generation: context.generation, currentKey: encryptionKey,
+                    getSourceKey: context.getConversionQuoteKey, acknowledgeSource: context.acknowledgeConversion, isActive: active });
+            }
             const performed = await processSyncQueue(context);
             if (!active()) return;
             setSyncError('');
@@ -155,7 +162,7 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
         } finally {
             if (active()) setIsSyncing(false);
         }
-    }, [canSync, context, initialize, legacyVaultGeneration, retrySession]);
+    }, [canSync, context, encryptionKey, initialize, legacyVaultGeneration, retrySession]);
 
     useEffect(() => {
         let active = true;
@@ -242,9 +249,15 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
         await refresh();
     }, [context, refresh]);
 
+    const unlockLegacyChanges = useCallback(async (password: string) => {
+        await unlockLegacyQueuedChanges(password);
+        await refresh();
+    }, [refresh, unlockLegacyQueuedChanges]);
+
     const lastSyncedAt = lastSync?.identity === identity ? lastSync.at : null;
-    const value = useMemo(() => ({ quotes, loading, initialFetchPending, pendingCount, lastSyncedAt, isSyncing, addQuote, deleteQuote, refresh, syncError, syncErrors, retrySyncOperation }),
-        [quotes, loading, initialFetchPending, pendingCount, lastSyncedAt, isSyncing, addQuote, deleteQuote, refresh, syncError, syncErrors, retrySyncOperation]);
+    const legacyConversionRequired = syncError === LEGACY_CONVERSION_KEY_REQUIRED;
+    const value = useMemo(() => ({ quotes, loading, initialFetchPending, pendingCount, lastSyncedAt, isSyncing, addQuote, deleteQuote, refresh, syncError, syncErrors, retrySyncOperation, legacyConversionRequired, unlockLegacyChanges }),
+        [quotes, loading, initialFetchPending, pendingCount, lastSyncedAt, isSyncing, addQuote, deleteQuote, refresh, syncError, syncErrors, retrySyncOperation, legacyConversionRequired, unlockLegacyChanges]);
     return <QuotesContext.Provider value={value}>{children}</QuotesContext.Provider>;
 };
 

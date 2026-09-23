@@ -29,6 +29,47 @@ Run [tests/database.sql](../tests/database.sql) only in a disposable Supabase pr
 
 Device-envelope migration production prerequisite: install and enable Supabase's native `pg_cron` extension before applying `20260922120000_envelope_migration.sql`. The migration schedules the hourly `quotevault-purge-expired-vault-rollback` job idempotently. Disposable databases without `pg_cron` remain supported for tests; an operator must invoke the service-only purge RPC until production scheduling is available.
 
+Apply the device-envelope migrations only after the earlier secure-vault,
+hardening, timestamp, checked-import, and admin-edit migrations are present.
+The complete additive tail is, in order:
+
+```text
+20260922000000_checked_import.sql
+20260922010000_admin_quote_edit.sql
+20260922020000_envelope_foundation.sql
+20260922030000_envelope_recovery.sql
+20260922040000_recovery_device_transition.sql
+20260922050000_recovery_binding_metadata.sql
+20260922060000_device_bootstrap.sql
+20260922070000_bootstrap_contract_hardening.sql
+20260922080000_device_authorized_rpcs.sql
+20260922090000_device_authorized_rpc_fixes.sql
+20260922100000_device_recovery_requirement.sql
+20260922110000_bootstrap_state_rpc.sql
+20260922120000_envelope_migration.sql
+20260922130000_envelope_rotation.sql
+```
+
+After applying them, read `public.vault_state` as the database owner and
+confirm `envelope_status = 'legacy'`, `prepared_generation is null`, and
+`active_migration_id is null`. Applying these migrations must not activate a
+generation, re-encrypt quotes, revoke members, or delete rollback data. Keep a
+fresh database backup and the previous compatible frontend release until the
+readback and application smoke checks pass.
+
+The lease signer is an Edge Function secret, not a database value and not a
+frontend build secret. Set `DEVICE_LEASE_PRIVATE_JWK` through `supabase
+secrets set` from an interactive or password-manager-provided variable, and
+publish only its matching public JWK as `VITE_DEVICE_LEASE_PUBLIC_JWK`. A
+rotation requires a new matching pair, a compatible static build, a successful
+renewal check, and only then removal of the old private secret. Never commit
+either private key material or a shell transcript containing it.
+
+Production activation is a separate approval. Enrollment, backup, staging,
+and deployment leave the vault in `legacy` or `preparing`; activation requires
+all members to be enrolled, a verified encrypted backup, fresh production
+readback, and explicit approval immediately before the activation RPC.
+
 Local PostgreSQL 17 verification, using an empty disposable database:
 
 ```sh

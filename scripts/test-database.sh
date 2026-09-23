@@ -43,6 +43,10 @@ psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922120000_e
 # Reapplication is intentional: this verifies additive migration idempotence.
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922120000_envelope_migration.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-migration.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922130000_envelope_rotation.sql
+# Reapplication is intentional: this verifies additive rotation migration idempotence.
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922130000_envelope_rotation.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-rotation.sql
 createdb "$migration_db"
 psql -X -v ON_ERROR_STOP=1 -d "$migration_db" -f tests/database-migration.sql
 createdb "$hardening_db"

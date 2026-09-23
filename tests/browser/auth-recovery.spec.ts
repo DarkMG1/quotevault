@@ -2,11 +2,17 @@ import { test, expect } from '@playwright/test';
 
 test('password recovery is explicit, durable across reload, and stays outside the vault', async ({ page }) => {
   await page.goto('/');
+  const vaultRequests: string[] = [];
+  page.on('request', request => {
+    const path = new URL(request.url()).pathname;
+    if (path.startsWith('/rest/v1/') || path.startsWith('/functions/v1/')) vaultRequests.push(path);
+  });
   await page.getByRole('button', { name: 'Forgot password?' }).click();
   await page.getByLabel('Email address').fill('nobody@example.invalid');
   await page.route('**/auth/v1/recover*', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
   await page.getByRole('button', { name: 'Send reset link' }).click();
   await expect(page.getByRole('status')).toContainText('If an account matches that email');
+  expect(vaultRequests).toEqual([]);
   await page.unroute('**/auth/v1/recover*');
 
   await page.addInitScript(() => localStorage.setItem('sb-127-auth-token:signed-out', '1'));
