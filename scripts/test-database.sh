@@ -50,6 +50,8 @@ psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-rotation.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922140000_audit_fixes.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922140000_audit_fixes.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-audit-fixes.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-legacy-client.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f scripts/quote-fingerprint.sql
 # An older migration reapplied by mistake recreates device-less overloads; the latest migration closes them.
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260921000000_vault_hardening.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922140000_audit_fixes.sql
