@@ -177,13 +177,16 @@ quote: the pre-reversion ciphertext is retained in
    still the new frontend, it keeps writing v2 quotes in `legacy` mode,
    which release a1bb840 shows as "Decryption Failed". If the switch is
    wanted later and any time has passed since the reversion, rerun steps
-   3-6 first (the reversion works from `legacy` too, and the same
+   2-6 first (the reversion works from `legacy` too, and the same
    passphrase may be reused), then switch immediately:
    ```sh
    ssh vps 'cd /home/dark/quotevault && ln -sfn releases/a1bb8400bf2c6ad013f756ccb6ee7a70c8640eb1 current.next && mv -Tf current.next current'
    python3 scripts/healthcheck.py --site https://quotes.darkmg1.dev --env-file .env
    ```
-   Rerun the fingerprint again: `v2_count` must be `0`. Only once the
+   Rerun the fingerprint again: `v2_count` must be `0`. If it is not,
+   point `current` back at the new-frontend release (same `ln -sfn … &&
+   mv -Tf` command with that release directory), rerun steps 2-6, and
+   switch again; the old frontend cannot rewrite v2 quotes itself. Only once the
    frontend decision above is complete does the operator give every
    member the new shared passphrase, out of band.
 
