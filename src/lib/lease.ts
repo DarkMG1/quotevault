@@ -1,6 +1,8 @@
 import type { DeviceLease, DeviceLeaseClaims } from '../types';
 
 const DAY = 24 * 60 * 60 * 1000;
+// A fresh lease carries the server clock; tolerate a client running slightly behind.
+const CLOCK_SKEW = 5 * 60 * 1000;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 
@@ -52,7 +54,7 @@ const validClaims = (claims: unknown, expected: LeaseExpectation): claims is Dev
         !claims.slice(1, 4).every(value => typeof value === 'string' && value.length > 0) ||
         !Number.isSafeInteger(claims[4]) || !Number.isSafeInteger(claims[5]) ||
         typeof claims[6] !== 'string' || claims[6].length === 0 ||
-        !Number.isSafeInteger(expected.now) || claims[4] > expected.now ||
+        !Number.isSafeInteger(expected.now) || claims[4] > expected.now + CLOCK_SKEW ||
         claims[5] - claims[4] !== 30 * DAY || expected.now >= claims[5] ||
         claims[1] !== expected.deviceId || claims[2] !== expected.accountId ||
         claims[3] !== expected.generation || claims[6] !== expected.publicKeyFingerprint) return false;

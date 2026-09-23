@@ -7,7 +7,7 @@ import type { Quote } from '../types';
 export const MIGRATION_BATCH_SIZE = 50;
 type RpcResponse = { data: unknown; error: { code?: string; message?: string } | null };
 export type MigrationStatus = 'prepared' | 'staging' | 'ready' | 'activated-maintenance' | 'active' | 'rolled-back' | 'abandoned';
-export interface MigrationTargetKey { id: string; publicJwk: JsonWebKey; publicKeyFingerprint?: string; }
+export interface MigrationTargetKey { id: string; publicJwk: JsonWebKey; publicKeyFingerprint?: string; attestation?: unknown; }
 export interface MigrationProgress { state: MigrationStatus; migrationId: string; stagedQuoteCount: number; expectedQuoteCount: number; verifiedQuoteCount: number; }
 export interface EnvelopeMigrationInput {
     sourceGeneration: string; sourceRevision?: number; sourceKey: CryptoKey; sourceQuotes?: Quote[];
@@ -73,12 +73,27 @@ async function sourceSnapshot(input: EnvelopeMigrationInput): Promise<{ revision
     if (input.sourceQuotes) { if (input.sourceRevision === undefined) throw new Error('Migration source revision is required with a supplied snapshot.'); return { revision: input.sourceRevision, quotes: input.sourceQuotes }; }
     return loadMigrationSourceSnapshot({ sourceGeneration: input.sourceGeneration, deviceId: input.deviceId, token: input.token });
 }
-async function wrapTargets(masterKey: Uint8Array, generation: string, targets: MigrationTargetKey[], field: 'device_id' | 'recovery_key_id') {
-    return Promise.all(targets.map(async target => {
+type KeyKind = 'device' | 'recovery';
+const attestationPlaintext = (kind: KeyKind, id: string, generation: string, fingerprint: string) => JSON.stringify(['quotevault-key-attestation', 1, kind, id, generation, fingerprint]);
+/** Proves, to later holders of this generation's key, that a vault-key holder approved this public key. */
+export const createKeyAttestation = (key: CryptoKey, kind: KeyKind, id: string, generation: string, fingerprint: string) => encryptData(attestationPlaintext(kind, id, generation, fingerprint), key);
+export async function verifyKeyAttestation(attestation: unknown, key: CryptoKey, kind: KeyKind, id: string, generation: string, fingerprint: string): Promise<boolean> {
+    try { return await decryptData(attestation as { iv: string; data: string }, key) === attestationPlaintext(kind, id, generation, fingerprint); } catch { return false; }
+}
+export async function attestVaultKeys(generation: string, auth: { deviceId: string; token: string }, devices: Array<Record<string, unknown>>, recoveries: Array<Record<string, unknown>>): Promise<void> {
+    if (devices.length || recoveries.length) await nullableRpc('attest_vault_keys', { p_device_id: auth.deviceId, p_token: auth.token, p_generation: validUuid(generation, 'generation'), p_devices: devices, p_recoveries: recoveries });
+}
+// The server lists the public keys; only keys attested under the source key are trusted with the target key.
+async function wrapTargets(masterKey: Uint8Array, generation: string, targetKey: CryptoKey, sourceKey: CryptoKey, sourceGeneration: string, targets: MigrationTargetKey[], kind: KeyKind) {
+    const field = kind === 'device' ? 'device_id' : 'recovery_key_id';
+    const wrapped = await Promise.all(targets.map(async target => {
         const id = validUuid(target.id, 'target ID'); const publicKey = await crypto.subtle.importKey('jwk', target.publicJwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt']);
         const fingerprint = await fingerprintPublicJwk(target.publicJwk); if (target.publicKeyFingerprint !== undefined && target.publicKeyFingerprint !== fingerprint) throw new Error('Migration public-key fingerprint mismatch.');
-        return { [field]: id, wrapped_key: await wrapVaultKey({ version: 1, vaultId: 'quotevault', generation, targetFingerprint: fingerprint, masterKey }, publicKey) };
+        if (!await verifyKeyAttestation(target.attestation, sourceKey, kind, id, sourceGeneration, fingerprint)) return null;
+        return { wrapper: { [field]: id, wrapped_key: await wrapVaultKey({ version: 1, vaultId: 'quotevault', generation, targetFingerprint: fingerprint, masterKey }, publicKey) }, attestation: { [field]: id, attestation: await createKeyAttestation(targetKey, kind, id, generation, fingerprint) } };
     }));
+    const trusted = wrapped.filter(item => item !== null);
+    return { wrappers: trusted.map(item => item.wrapper), attestations: trusted.map(item => item.attestation) };
 }
 
 export async function getEnvelopeMigrationStatus(deviceId: string | null, token: string | null): Promise<Record<string, unknown> | null> {
@@ -103,14 +118,14 @@ export async function rollbackEnvelopeMigration(migrationId: string, deviceId: s
 
 export interface EnvelopeMigrationCoverage {
     migrationId: string; status: MigrationStatus; sourceGeneration: string; targetGeneration: string; expectedQuoteCount: number; stagedQuoteCount: number; queueReportMaxAgeSeconds: number; ready: boolean;
-    members: Array<{ memberId: string | null; email: string | null; devices: Array<{ deviceId: string; publicJwk: JsonWebKey; publicKeyFingerprint: string; wrapperStaged: boolean; emptyQueueReportedAt: string | null }>; recoveryKeys: Array<{ recoveryKeyId: string; publicJwk: JsonWebKey; publicKeyFingerprint: string; wrapperStaged: boolean }>; blockers: string[] }>;
+    members: Array<{ memberId: string | null; email: string | null; devices: Array<{ deviceId: string; publicJwk: JsonWebKey; publicKeyFingerprint: string; attestation: unknown; wrapperStaged: boolean; emptyQueueReportedAt: string | null }>; recoveryKeys: Array<{ recoveryKeyId: string; publicJwk: JsonWebKey; publicKeyFingerprint: string; attestation: unknown; wrapperStaged: boolean }>; blockers: string[] }>;
 }
 export async function getEnvelopeMigrationCoverage(migrationId: string, deviceId: string, token: string): Promise<EnvelopeMigrationCoverage> {
     const data = objectResponse(await rpc('get_envelope_migration_coverage', { p_migration_id: validUuid(migrationId, 'ID'), p_device_id: validUuid(deviceId, 'device ID'), p_device_token: token }), 'migration coverage');
     const migration = migrationResponse(data, migrationId); const integer = (value: unknown, label: string) => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : (() => { throw new Error(`Invalid migration ${label}.`); })();
     const members = Array.isArray(data.members) ? data.members.map(member => { const item = objectResponse(member, 'migration member');
-        const devices = Array.isArray(item.devices) ? item.devices.map(device => { const value = objectResponse(device, 'migration device'); return { deviceId: validUuid(stringResponse(value.device_id, 'device ID'), 'device ID'), publicJwk: objectResponse(value.public_jwk, 'device public key') as JsonWebKey, publicKeyFingerprint: stringResponse(value.public_key_fingerprint, 'device fingerprint'), wrapperStaged: value.wrapper_staged === true, emptyQueueReportedAt: value.empty_queue_reported_at === null ? null : normalizeMigrationTimestamp(value.empty_queue_reported_at) }; }) : [];
-        const recoveryKeys = Array.isArray(item.recovery_keys) ? item.recovery_keys.map(key => { const value = objectResponse(key, 'migration recovery key'); return { recoveryKeyId: validUuid(stringResponse(value.recovery_key_id, 'recovery key ID'), 'recovery key ID'), publicJwk: objectResponse(value.public_jwk, 'recovery public key') as JsonWebKey, publicKeyFingerprint: stringResponse(value.public_key_fingerprint, 'recovery key fingerprint'), wrapperStaged: value.wrapper_staged === true }; }) : [];
+        const devices = Array.isArray(item.devices) ? item.devices.map(device => { const value = objectResponse(device, 'migration device'); return { deviceId: validUuid(stringResponse(value.device_id, 'device ID'), 'device ID'), publicJwk: objectResponse(value.public_jwk, 'device public key') as JsonWebKey, publicKeyFingerprint: stringResponse(value.public_key_fingerprint, 'device fingerprint'), attestation: value.attestation, wrapperStaged: value.wrapper_staged === true, emptyQueueReportedAt: value.empty_queue_reported_at === null ? null : normalizeMigrationTimestamp(value.empty_queue_reported_at) }; }) : [];
+        const recoveryKeys = Array.isArray(item.recovery_keys) ? item.recovery_keys.map(key => { const value = objectResponse(key, 'migration recovery key'); return { recoveryKeyId: validUuid(stringResponse(value.recovery_key_id, 'recovery key ID'), 'recovery key ID'), publicJwk: objectResponse(value.public_jwk, 'recovery public key') as JsonWebKey, publicKeyFingerprint: stringResponse(value.public_key_fingerprint, 'recovery key fingerprint'), attestation: value.attestation, wrapperStaged: value.wrapper_staged === true }; }) : [];
         const blockers = Array.isArray(item.blockers) && item.blockers.every(value => typeof value === 'string') ? item.blockers as string[] : [];
         return { memberId: item.member_id === null ? null : validUuid(stringResponse(item.member_id, 'member ID'), 'member ID'), email: item.email === null ? null : stringResponse(item.email, 'member email'), devices, recoveryKeys, blockers };
     }) : [];
@@ -186,8 +201,10 @@ export async function runEnvelopeMigration(input: EnvelopeMigrationInput): Promi
         const targetKey = await deriveQuoteKey(targetMasterKey, targetGeneration);
         progress(input, 'staging', migrationId, 0, sourceQuotes.length, 0); const refreshed = await refreshEnvelopeMigrationSource(migrationId, context.sourceRevision, auth.deviceId, auth.token);
         if (refreshed.reset) return { migrationId, status: 'staging', targetGeneration, stagedQuoteCount: 0 };
-        const wrappers = { devices: await wrapTargets(targetMasterKey, targetGeneration, input.deviceWrappers ?? [], 'device_id'), recoveries: await wrapTargets(targetMasterKey, targetGeneration, input.recoveryWrappers ?? [], 'recovery_key_id') };
-        const wrapperResponse = migrationResponse(await rpc('stage_envelope_wrappers', { p_migration_id: migrationId, p_device_id: auth.deviceId, p_token: auth.token, p_devices: wrappers.devices, p_recoveries: wrappers.recoveries })); let stagedQuoteCount = wrapperResponse.stagedQuoteCount; let serverStatus = wrapperResponse.status;
+        const devices = await wrapTargets(targetMasterKey, targetGeneration, targetKey, input.sourceKey, input.sourceGeneration, input.deviceWrappers ?? [], 'device');
+        const recoveries = await wrapTargets(targetMasterKey, targetGeneration, targetKey, input.sourceKey, input.sourceGeneration, input.recoveryWrappers ?? [], 'recovery');
+        const wrapperResponse = migrationResponse(await rpc('stage_envelope_wrappers', { p_migration_id: migrationId, p_device_id: auth.deviceId, p_token: auth.token, p_devices: devices.wrappers, p_recoveries: recoveries.wrappers }));
+        await attestVaultKeys(targetGeneration, auth, devices.attestations, recoveries.attestations); let stagedQuoteCount = wrapperResponse.stagedQuoteCount; let serverStatus = wrapperResponse.status;
         for (let start = 0; start < sourceQuotes.length; start += MIGRATION_BATCH_SIZE) {
             const rows = await Promise.all(sourceQuotes.slice(start, start + MIGRATION_BATCH_SIZE).map(async sourceRow => { const payload = objectResponse(await decryptQuoteRecord(sourceRow, input.sourceKey), 'decrypted quote'); const id = validUuid(stringResponse(payload.id ?? sourceRow.id, 'quote ID'), 'quote ID'); const visible = { id, quote_date: payload.quote_date === undefined ? null : payload.quote_date as string | null, created_at: normalizeMigrationTimestamp(payload.created_at ?? sourceRow.created_at), user_id: validUuid(stringResponse(payload.user_id ?? sourceRow.user_id, 'quote owner'), 'quote owner'), vault_generation: targetGeneration, author: 'ENCRYPTED', context: 'ENCRYPTED' }; return await encryptQuoteRecord(privateFields(payload), visible, targetKey) as unknown as Quote; }));
             const responseValue = migrationResponse(await rpc('stage_envelope_quotes', { p_migration_id: migrationId, p_device_id: auth.deviceId, p_token: auth.token, p_rows: rows })); stagedQuoteCount = Math.max(stagedQuoteCount + rows.length, responseValue.stagedQuoteCount); serverStatus = responseValue.status; progress(input, 'staging', migrationId, stagedQuoteCount, sourceQuotes.length, 0);

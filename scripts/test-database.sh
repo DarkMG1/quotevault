@@ -47,6 +47,13 @@ psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922130000_e
 # Reapplication is intentional: this verifies additive rotation migration idempotence.
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922130000_envelope_rotation.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-rotation.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922140000_audit_fixes.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922140000_audit_fixes.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-audit-fixes.sql
+# An older migration reapplied by mistake recreates device-less overloads; the latest migration closes them.
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260921000000_vault_hardening.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922140000_audit_fixes.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -c "do \$\$ begin if exists(select 1 from pg_proc where oid in (to_regprocedure('public.sync_quotes(uuid,bigint,jsonb)'),to_regprocedure('public.checked_import(uuid,bigint,jsonb)'),to_regprocedure('public.edit_quote(uuid,uuid,text,text,date)'),to_regprocedure('public.edit_quotes(uuid,jsonb)')) and (has_function_privilege('authenticated',oid,'execute') or has_function_privilege('anon',oid,'execute'))) or to_regprocedure('public.sync_quotes(uuid,bigint,jsonb)') is null then raise exception 'legacy overload remains executable'; end if; end \$\$;"
 createdb "$migration_db"
 psql -X -v ON_ERROR_STOP=1 -d "$migration_db" -f tests/database-migration.sql
 createdb "$hardening_db"

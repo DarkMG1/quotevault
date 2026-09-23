@@ -39,3 +39,11 @@ test('confirmation requires the requested words at exactly the requested positio
   assert.equal(api.confirmRecoveryPhrase(phrase, ['wrong', phrase[7], phrase[12]], positions), false);
   assert.equal(api.confirmRecoveryPhrase(phrase, phrase.slice(0, 2), positions), false);
 });
+
+test('recovery input tolerates case and whitespace but not unknown words', () => {
+  const words = api.generateRecoveryPhrase();
+  const typed = `  ${words[0][0].toUpperCase()}${words[0].slice(1)}  ${words.slice(1).join('\n')}\n`;
+  assert.equal(api.normalizeRecoveryPhrase(typed), words.join(' '));
+  assert.throws(() => api.normalizeRecoveryPhrase(words.slice(1).join(' ')));
+  assert.throws(() => api.normalizeRecoveryPhrase(`${words.slice(1).join(' ')} notaword`));
+});

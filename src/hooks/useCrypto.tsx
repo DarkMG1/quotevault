@@ -13,11 +13,12 @@ import { activateRecoveredDevice, beginRecovery, completeRecovery, createRecover
 import { decryptPrivateBundle, deriveQuoteKey, deriveRecoveryBundleKey, encryptPrivateBundle, fingerprintPublicJwk, generateAuthorizationToken, generateWrappingKeyPair, unwrapVaultKey, wrapVaultKey } from '../lib/device-crypto';
 import { arrayBufferToBase64 } from '../lib/crypto';
 import { verifyDeviceLease } from '../lib/lease';
-import { clearLocalSyncState } from '../lib/sync';
+import { acknowledgeEmptyConversion, clearLocalSyncState } from '../lib/sync';
 import { db } from '../lib/db';
 import { clearProfileCache } from '../lib/profile-cache';
 import type { DeviceLocalState } from '../types';
-import { getPendingEnvelopeMigration, reportEnvelopeMigrationEmptyQueue } from '../lib/vault-migration';
+import { attestVaultKeys, createKeyAttestation, getPendingEnvelopeMigration, reportEnvelopeMigrationEmptyQueue } from '../lib/vault-migration';
+import { normalizeRecoveryPhrase } from '../lib/recovery-phrase';
 
 interface CryptoContextType {
     encryptionKey: CryptoKey | null; isLocked: boolean; vaultGeneration: string | null; legacyVaultGeneration: string | null;
@@ -57,7 +58,10 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
     const preparedMasterKeyBootstrap = useRef(false);
     const keyEpoch = useRef(0);
     const legacyConversionKey = useRef<{ generation: string; key: CryptoKey } | null>(null);
-    const clearKeys = useCallback(() => { keyEpoch.current++; masterKey.current?.fill(0); masterKey.current = null; preparedMasterKey.current?.fill(0); preparedMasterKey.current = null; preparedMasterKeyGeneration.current = null; preparedMasterKeyBootstrap.current = false; legacyConversionKey.current = null; keyGeneration.current = null; setEncryptionKey(null); setLeaseExpiresAt(null); }, []);
+    // Kept for the unlocked session so background sync never re-prompts a passkey.
+    const deviceAuthorization = useRef<{ deviceId: string; token: string } | null>(null);
+    const attestedDevice = useRef('');
+    const clearKeys = useCallback(() => { keyEpoch.current++; masterKey.current?.fill(0); masterKey.current = null; preparedMasterKey.current?.fill(0); preparedMasterKey.current = null; preparedMasterKeyGeneration.current = null; preparedMasterKeyBootstrap.current = false; legacyConversionKey.current = null; deviceAuthorization.current = null; keyGeneration.current = null; setEncryptionKey(null); setLeaseExpiresAt(null); }, []);
     const refreshSettings = useCallback(async () => {
         if (!userId) return; const version = ++request.current;
         try { const next = await loadVaultState(userId, !canSync); if (request.current !== version) return;
@@ -72,7 +76,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { const settingsRequest = request; const settingsUnlock = unlockRequest; void refreshSettings(); return () => { settingsRequest.current++; settingsUnlock.current++; }; }, [refreshSettings]);
     useEffect(() => () => clearKeys(), [clearKeys, userId]);
-    const lockVault = useCallback((expired = false) => { unlockRequest.current++; clearKeys(); setLeaseExpired(expired); setError(''); stateRef.current = null; setState(null); setBusy(true); void refreshSettings(); }, [clearKeys, refreshSettings]);
+    const lockVault = useCallback((expired: unknown = false) => { unlockRequest.current++; clearKeys(); setLeaseExpired(expired === true); setError(''); stateRef.current = null; setState(null); setBusy(true); void refreshSettings(); }, [clearKeys, refreshSettings]);
     const validLease = useCallback((local: DeviceLocalState, generation: string, now = Date.now()) => local.lease ? verifyDeviceLease(local.lease, { now, deviceId: local.deviceId, accountId: local.accountId, generation, publicKeyFingerprint: local.publicKeyFingerprint }) : Promise.resolve(false), []);
     const unlockDevice = useCallback(async (mode: 'remembered' | 'passkey-prf') => {
         const vault = stateRef.current; if (!user || !vault) return;
@@ -103,12 +107,14 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
             if (needsDeviceCompletion(local, targetGeneration)) { if (!canSync || !navigator.onLine) throw new Error('This device needs its current vault authorization. Connect and try again.'); local = await renewThenCompleteDevice({ accountId: user.id, deviceId: local.deviceId, token: bundle.authorizationToken, generation: targetGeneration, leaseGeneration: preparing ? vault.generation : targetGeneration, publicKeyFingerprint: local.publicKeyFingerprint, rememberedKey: mode === 'remembered' ? local.rememberedKey : undefined }); }
             else if (!preparing && !await validLease(local, targetGeneration)) { if (!canSync || !navigator.onLine) throw new Error('This device lease has expired. Connect to renew authorization.'); local = await renewDeviceLease({ accountId: user.id, deviceId: local.deviceId, token: bundle.authorizationToken, generation: targetGeneration, publicKeyFingerprint: local.publicKeyFingerprint }); }
             const wrapper = deviceWrapperForGeneration(local, targetGeneration); if (!wrapper || !preparing && !await validLease(local, targetGeneration)) throw new Error('Device authorization is invalid.');
-            if (!preparing && local.wrapper !== wrapper) { local = { ...local, wrapper, preparedWrapper: undefined }; await saveDeviceState(local); }
+            if (!preparing && local.wrapper !== wrapper) { const previous = local.wrapper?.generation; local = { ...local, wrapper, preparedWrapper: undefined }; await saveDeviceState(local);
+                // Best effort: queued older work is acknowledged after conversion instead, and a rollback leaves nothing to release.
+                if (previous && previous !== wrapper.generation && canSync && navigator.onLine) { const deviceId = local.deviceId; void acknowledgeEmptyConversion(user.id, previous, source => acknowledgeConversionQueue(source, deviceId, bundle.authorizationToken)).catch(() => undefined); } }
             const opened = await unwrapVaultKey(wrapper.wrappedKey, bundle.privateKey, { vaultId: 'quotevault', generation: targetGeneration, targetFingerprint: local.publicKeyFingerprint });
             if (unlockRequest.current !== version) { opened.fill(0); return; }
             if (preparing) { preparedMasterKey.current?.fill(0); preparedMasterKey.current = opened; preparedMasterKeyGeneration.current = targetGeneration; preparedMasterKeyBootstrap.current = false; setDeviceState(local); setLeaseExpired(false); setRecoveryRequired(needsRecoverySetup(local)); return; }
             let retained = false;
-            try { const quoteKey = await deriveQuoteKey(opened, quoteGeneration(vault)); if (unlockRequest.current !== version || stateRef.current?.generation !== vault.generation || stateRef.current?.envelope_status !== vault.envelope_status) return; clearKeys(); masterKey.current = opened; retained = true; keyGeneration.current = targetGeneration; setDeviceState(local); setLeaseExpired(false); setLeaseExpiresAt(local.lease?.claims[5] ?? null); setRecoveryRequired(needsRecoverySetup(local)); setEncryptionKey(quoteKey); }
+            try { const quoteKey = await deriveQuoteKey(opened, quoteGeneration(vault)); if (unlockRequest.current !== version || stateRef.current?.generation !== vault.generation || stateRef.current?.envelope_status !== vault.envelope_status) return; clearKeys(); masterKey.current = opened; retained = true; deviceAuthorization.current = { deviceId: local.deviceId, token: bundle.authorizationToken }; keyGeneration.current = targetGeneration; setDeviceState(local); setLeaseExpired(false); setLeaseExpiresAt(local.lease?.claims[5] ?? null); setRecoveryRequired(needsRecoverySetup(local)); setEncryptionKey(quoteKey); }
             finally { if (!retained) opened.fill(0); }
         } catch (cause) { if (unlockRequest.current === version) setError(cause instanceof Error ? cause.message : 'Could not unlock this device.'); }
         finally { if (unlockRequest.current === version) setBusy(false); }
@@ -124,7 +130,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
         const version = ++unlockRequest.current; setBusy(true); setError('');
         try { let key: CryptoKey; let generation = vault.generation;
             if (vault.verifier) key = await unlockWithVerifier(password, vault.kdf, vault.verifier); else { if (!canSync) throw new Error('Connect to initialize the vault.'); if (!isAdminUser(user)) throw new Error('The administrator must initialize the vault first.'); const config = await createVaultConfig(password); const { data, error: initError } = await supabase.rpc('initialize_vault', { p_expected_generation: vault.generation, p_kdf: config.kdf, p_verifier: config.verifier }); if (initError) throw new Error(initError.message); const initialized = parseLegacyVaultMutation(data); cacheVaultState(user.id, initialized); stateRef.current = initialized; setState(initialized); key = config.key; generation = initialized.generation; }
-            if (unlockRequest.current === version) { keyGeneration.current = generation; setEncryptionKey(key); form.reset(); }
+            if (unlockRequest.current === version && stateRef.current?.generation === generation) { keyGeneration.current = generation; setEncryptionKey(key); form.reset(); }
         } catch (cause) { if (unlockRequest.current === version) setError(cause instanceof Error ? cause.message : 'Could not unlock the vault.'); } finally { if (unlockRequest.current === version) setBusy(false); }
     };
     const enroll = useCallback(async (mode: 'remembered' | 'passkey-prf') => {
@@ -175,19 +181,30 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
     }, [deviceState, unlockDevice]);
     const getDeviceAuthorization = useCallback(async () => {
         if (!encryptionKey || !user) throw new Error('Unlock an approved device first.');
+        if (deviceAuthorization.current) return deviceAuthorization.current;
+        const epoch = keyEpoch.current;
         const local = await loadDeviceState(user.id); if (!local) throw new Error('Device enrollment state is missing.');
         const key = local.protectionMode === 'remembered' ? local.rememberedKey : await unlockPasskey(local.protection as never);
         if (!key) throw new Error('Unlock this device to authorize the request.');
         const bundle = await decryptDeviceBundle(local, key);
-        return { deviceId: local.deviceId, token: bundle.authorizationToken };
+        const authorization = { deviceId: local.deviceId, token: bundle.authorizationToken };
+        if (keyEpoch.current === epoch) deviceAuthorization.current = authorization;
+        return authorization;
     }, [encryptionKey, user]);
+    // Migrations wrap a new vault key only for public keys attested under the current key.
+    useEffect(() => {
+        const vault = stateRef.current; const generation = keyGeneration.current;
+        if (!encryptionKey || !deviceState || !vault || isLegacyVaultState(vault) || generation !== vault.generation || !canSync) return;
+        const attestation = `${deviceState.deviceId}:${generation}`; if (attestedDevice.current === attestation) return; attestedDevice.current = attestation;
+        void (async () => { try { const auth = await getDeviceAuthorization(); await attestVaultKeys(generation, auth, [{ device_id: auth.deviceId, attestation: await createKeyAttestation(encryptionKey, 'device', auth.deviceId, generation, deviceState.publicKeyFingerprint) }], []); } catch { attestedDevice.current = ''; } })();
+    }, [canSync, deviceState, encryptionKey, getDeviceAuthorization]);
     const getConversionQuoteKey = useCallback(async (sourceGeneration: string) => {
         const legacy = user ? readLegacyConversionState(user.id) : null;
         if (legacy?.generation === sourceGeneration) {
             if (legacyConversionKey.current?.generation === sourceGeneration) return legacyConversionKey.current.key;
             throw new Error(LEGACY_CONVERSION_KEY_REQUIRED);
         }
-        if (!user || !deviceState || !canSync || !navigator.onLine) throw new Error('Connect an approved device before converting older saved changes.');
+        if (!user || !canSync || !navigator.onLine) throw new Error('Connect an approved device before converting older saved changes.');
         const auth = await getDeviceAuthorization();
         const local = await loadDeviceState(user.id);
         if (!local) throw new Error('Device enrollment state is missing.');
@@ -197,7 +214,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
         const wrapper = await getConversionWrapper(sourceGeneration, auth.deviceId, auth.token);
         const oldMaster = await unwrapVaultKey(wrapper.wrappedKey, bundle.privateKey, { vaultId: 'quotevault', generation: sourceGeneration, targetFingerprint: local.publicKeyFingerprint });
         try { return await deriveQuoteKey(oldMaster, sourceGeneration); } finally { oldMaster.fill(0); }
-    }, [canSync, deviceState, getDeviceAuthorization, user]);
+    }, [canSync, getDeviceAuthorization, user]);
     const unlockLegacyQueuedChanges = useCallback(async (password: string) => {
         if (!user) throw new Error(LEGACY_CONVERSION_KEY_REQUIRED);
         const legacy = readLegacyConversionState(user.id);
@@ -225,11 +242,13 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
     }, [getDeviceAuthorization]);
     const renewAuthorizationLease = useCallback(async (auth: { deviceId: string; token: string }) => {
         const vault = stateRef.current;
-        if (!user || !vault || isLegacyVaultState(vault) || !deviceState) return;
+        // Stored state, not deviceState: each renewal replaces deviceState and must not re-create the sync context.
+        const local = user ? await loadDeviceState(user.id) : null;
+        if (!user || !vault || isLegacyVaultState(vault) || !local) return;
         const next = await renewDeviceLease({ accountId: user.id, deviceId: auth.deviceId, token: auth.token,
-            generation: vault.generation, publicKeyFingerprint: deviceState.publicKeyFingerprint });
+            generation: vault.generation, publicKeyFingerprint: local.publicKeyFingerprint });
         setDeviceState(next); setLeaseExpired(false); setLeaseExpiresAt(next.lease?.claims[5] ?? null);
-    }, [deviceState, user]);
+    }, [user]);
     const forgetDevice = useCallback(async () => {
         const local = deviceState; if ((local?.wrapper || local?.preparedWrapper) && canSync && navigator.onLine) { const auth = await getDeviceAuthorization(); await revokeOwnDevice(local.deviceId, auth.token); }
         await clearLocalSyncState(); await db.deviceState.clear(); if (user) { clearCachedVaultState(user.id); clearProfileCache(user.id); }
@@ -255,12 +274,12 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
         if (!master) throw new Error('Unlock the vault before setting up recovery.');
         try { const salt = crypto.getRandomValues(new Uint8Array(16)); const kdf = { version: 1 as const, salt: arrayBufferToBase64(salt), iterations: 600000 as const }; salt.fill(0);
             const recoveryKeyId = crypto.randomUUID(); const pair = await generateWrappingKeyPair(); const publicJwk = await crypto.subtle.exportKey('jwk', pair.publicKey); const privateJwk = await crypto.subtle.exportKey('jwk', pair.privateKey); const publicKeyFingerprint = await fingerprintPublicJwk(publicJwk); const encryptionKey = await deriveRecoveryBundleKey(phrase, kdf); const token = generateAuthorizationToken();
-            const encryptedPrivateKey = await encryptPrivateBundle({ version: 1, privateJwk, authorizationToken: token }, encryptionKey, { accountId: user.id, recordId: recoveryKeyId, publicKeyFingerprint, protectionMode: 'recovery', version: 1, recoveryKdf: kdf }); if (keyEpoch.current !== epoch) throw new Error('Vault access changed; unlock and set up recovery again.'); const wrappedKey = await wrapVaultKey({ version: 1, vaultId: 'quotevault', generation, targetFingerprint: publicKeyFingerprint, masterKey: master }, pair.publicKey); const auth = await getDeviceAuthorization(); if (keyEpoch.current !== epoch) throw new Error('Vault access changed; unlock and set up recovery again.'); try { await createRecoveryKey({ recoveryKeyId, publicJwk, publicKeyFingerprint, encryptedPrivateKey, kdf, generation, wrappedKey, deviceId: auth.deviceId, token: auth.token }, replace); } catch (cause) { const local = await loadDeviceState(user.id); let completed: Awaited<ReturnType<typeof completeDevice>> | null = null; try { if (local) { const savedTarget = vault.envelope_status === 'preparing' && !isLegacyVaultState(vault) && vault.prepared_generation ? deviceWrapperForGeneration(local, vault.prepared_generation) : undefined; completed = await completeDevice(user.id, local.deviceId, auth.token, local.rememberedKey, generation); if (savedTarget) { completed = { ...completed, preparedWrapper: savedTarget }; await saveDeviceState(completed); } } } catch { /* The original creation failure is more useful. */ } const outcome = completed ? recoverySetupRetryOutcome(replace, recoveryKeyId, completed.activeRecoveryKeyId) : 'original'; if (outcome === 'committed') { setDeviceState(completed); setRecoveryRequired(false); return; } if (outcome === 'other') { setDeviceState(completed); throw new Error('Recovery was configured on another device. This displayed phrase was not saved; reload to continue.'); } throw cause; } const local = await loadDeviceState(user.id); if (local?.recoverySetupRequired) { await saveDeviceState({ ...local, recoverySetupRequired: false }); setDeviceState({ ...local, recoverySetupRequired: false }); } }
+            const encryptedPrivateKey = await encryptPrivateBundle({ version: 1, privateJwk, authorizationToken: token }, encryptionKey, { accountId: user.id, recordId: recoveryKeyId, publicKeyFingerprint, protectionMode: 'recovery', version: 1, recoveryKdf: kdf }); if (keyEpoch.current !== epoch) throw new Error('Vault access changed; unlock and set up recovery again.'); const wrappedKey = await wrapVaultKey({ version: 1, vaultId: 'quotevault', generation, targetFingerprint: publicKeyFingerprint, masterKey: master }, pair.publicKey); const auth = await getDeviceAuthorization(); if (keyEpoch.current !== epoch) throw new Error('Vault access changed; unlock and set up recovery again.'); try { await createRecoveryKey({ recoveryKeyId, publicJwk, publicKeyFingerprint, encryptedPrivateKey, kdf, generation, wrappedKey, deviceId: auth.deviceId, token: auth.token }, replace); } catch (cause) { const local = await loadDeviceState(user.id); let completed: Awaited<ReturnType<typeof completeDevice>> | null = null; try { if (local) { const savedTarget = vault.envelope_status === 'preparing' && !isLegacyVaultState(vault) && vault.prepared_generation ? deviceWrapperForGeneration(local, vault.prepared_generation) : undefined; completed = await completeDevice(user.id, local.deviceId, auth.token, local.rememberedKey, generation); if (savedTarget) { completed = { ...completed, preparedWrapper: savedTarget }; await saveDeviceState(completed); } } } catch { /* The original creation failure is more useful. */ } const outcome = completed ? recoverySetupRetryOutcome(replace, recoveryKeyId, completed.activeRecoveryKeyId) : 'original'; if (outcome === 'committed') { setDeviceState(completed); setRecoveryRequired(false); return; } if (outcome === 'other') { setDeviceState(completed); throw new Error('Recovery was configured on another device. This displayed phrase was not saved; reload to continue.'); } throw cause; } try { await attestVaultKeys(generation, auth, [], [{ recovery_key_id: recoveryKeyId, attestation: await createKeyAttestation(await deriveQuoteKey(master, generation), 'recovery', recoveryKeyId, generation, publicKeyFingerprint) }]); } catch { /* An unattested recovery key shows as a migration blocker until it is replaced. */ } const local = await loadDeviceState(user.id); if (local?.recoverySetupRequired) { await saveDeviceState({ ...local, recoverySetupRequired: false }); setDeviceState({ ...local, recoverySetupRequired: false }); } }
         finally { master.fill(0); }
     }, [getApprovedTargetMasterKey, getDeviceAuthorization, user]);
     const recoverDevice = useCallback(async (phrase: string, mode: 'remembered' | 'passkey-prf') => {
         if (!user || !canSync || !navigator.onLine) throw new Error('Connect to use personal recovery.');
-        const recovery = await beginRecovery(); const key = await deriveRecoveryBundleKey(phrase, recovery.kdf); const bundle = await decryptPrivateBundle(recovery.encryptedPrivateKey, key, { accountId: user.id, recordId: recovery.recoveryKeyId, publicKeyFingerprint: recovery.publicKeyFingerprint, protectionMode: 'recovery', version: 1, recoveryKdf: recovery.kdf }); const privateKey = await crypto.subtle.importKey('jwk', bundle.privateJwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['decrypt']);
+        const recovery = await beginRecovery(); const key = await deriveRecoveryBundleKey(normalizeRecoveryPhrase(phrase), recovery.kdf); const bundle = await decryptPrivateBundle(recovery.encryptedPrivateKey, key, { accountId: user.id, recordId: recovery.recoveryKeyId, publicKeyFingerprint: recovery.publicKeyFingerprint, protectionMode: 'recovery', version: 1, recoveryKdf: recovery.kdf }); const privateKey = await crypto.subtle.importKey('jwk', bundle.privateJwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['decrypt']);
         const responseBytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, privateKey, Uint8Array.from(atob(recovery.ciphertext.replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0)))); const response = arrayBufferToBase64(responseBytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); responseBytes.fill(0);
         const completed = await completeRecovery({ challengeId: recovery.challengeId, recoveryKeyId: recovery.recoveryKeyId, response }); const master = await unwrapVaultKey(completed.wrappedKey, privateKey, { vaultId: 'quotevault', generation: completed.generation, targetFingerprint: recovery.publicKeyFingerprint });
         try { const passkey = mode === 'passkey-prf' ? await registerPasskey({ userId: user.id, userName: user.email ?? user.id, displayName: user.user_metadata?.first_name ?? 'QuoteVault member' }) : undefined; const { key: passkeyKey, ...protection } = passkey ?? {}; const enrollment = await prepareDeviceEnrollment({ accountId: user.id, label: navigator.userAgent.slice(0, 100) || 'Recovered browser', requestKind: 'recovery', protectionMode: mode, protection: mode === 'remembered' ? { version: 1, mode: 'remembered' } : protection, encryptionKey: passkeyKey }); const request = await getDeviceRequest(enrollment.deviceId); const publicKey = await crypto.subtle.importKey('jwk', request.publicJwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt']); const wrappedKey = await wrapVaultKey({ version: 1, vaultId: 'quotevault', generation: completed.generation, targetFingerprint: request.publicKeyFingerprint, masterKey: master }, publicKey); await activateRecoveredDevice({ challengeId: recovery.challengeId, transitionToken: completed.transitionToken, requestId: enrollment.deviceId, enrollmentFingerprint: request.enrollmentFingerprint, generation: completed.generation, wrappedKey }); const pending = await loadDeviceState(user.id); if (!pending) throw new Error('Recovered device state is missing.'); await renewThenCompleteDevice({ accountId: user.id, deviceId: enrollment.deviceId, token: enrollment.authorizationToken, generation: completed.generation, publicKeyFingerprint: pending.publicKeyFingerprint, rememberedKey: enrollment.rememberedKey }); setDeviceState(await loadDeviceState(user.id)); }
@@ -293,13 +312,13 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
             try { if (keyEpoch.current !== epoch || stateRef.current?.envelope_status !== vault.envelope_status || enrollmentGeneration(stateRef.current) !== targetGeneration) throw new Error('Passkey restoration was cancelled.');
                 if (vault.envelope_status === 'preparing') { preparedMasterKey.current?.fill(0); preparedMasterKey.current = opened; retained = true; preparedMasterKeyGeneration.current = targetGeneration; preparedMasterKeyBootstrap.current = false; setDeviceState(completed); setLeaseExpired(false); setRecoveryRequired(needsRecoverySetup(completed)); setPendingRequest(null); return; }
                 if (isLegacyVaultState(vault)) throw new Error('Restored device does not match the active vault.');
-                const quoteKey = await deriveQuoteKey(opened, vault.generation); if (keyEpoch.current !== epoch || stateRef.current?.generation !== vault.generation || stateRef.current?.envelope_status !== vault.envelope_status) throw new Error('Passkey restoration was cancelled.'); clearKeys(); masterKey.current = opened; retained = true; keyGeneration.current = vault.generation; setDeviceState(completed); setLeaseExpired(false); setLeaseExpiresAt(completed.lease?.claims[5] ?? null); setRecoveryRequired(needsRecoverySetup(completed)); setPendingRequest(null); setEncryptionKey(quoteKey);
+                const quoteKey = await deriveQuoteKey(opened, vault.generation); if (keyEpoch.current !== epoch || stateRef.current?.generation !== vault.generation || stateRef.current?.envelope_status !== vault.envelope_status) throw new Error('Passkey restoration was cancelled.'); clearKeys(); masterKey.current = opened; retained = true; deviceAuthorization.current = { deviceId: local.deviceId, token: bundle.authorizationToken }; keyGeneration.current = vault.generation; setDeviceState(completed); setLeaseExpired(false); setLeaseExpiresAt(completed.lease?.claims[5] ?? null); setRecoveryRequired(needsRecoverySetup(completed)); setPendingRequest(null); setEncryptionKey(quoteKey);
             } finally { if (!retained) opened.fill(0); }
         } catch (cause) { await deleteDeviceState(user.id); throw cause; }
     }, [canSync, clearKeys, user]);
     if (!user) return children;
     if (encryptionKey && recoveryRequired) return <RecoverySetup onComplete={async phrase => { await setupRecovery(phrase); setRecoveryRequired(false); }} />;
-    if (!encryptionKey) { const legacy = isLegacyVaultState(state); const preparing = state?.envelope_status === 'preparing'; const pending = preparing && !!deviceState && !deviceState.wrapper && !deviceState.preparedWrapper; const gate = vaultGateState({ legacy, pending: false, device: !legacy, key: false, leaseValid: !leaseExpired });
+    if (!encryptionKey) { const legacy = isLegacyVaultState(state); const preparing = state?.envelope_status === 'preparing'; const unapproved = !!deviceState && !deviceState.wrapper && !deviceState.preparedWrapper; const pending = preparing && unapproved; const gate = vaultGateState({ legacy, pending: unapproved && !!pendingRequest, device: !legacy, key: false, leaseValid: !leaseExpired });
         const approvalUrl = pendingRequest ? `https://quotes.darkmg1.dev/#approve?request=${pendingRequest.requestId}&fingerprint=${encodeURIComponent(pendingRequest.fingerprint)}` : undefined;
         return <VaultGate state={gate as Exclude<typeof gate, 'unlocked'>} preparing={preparing} preparingPending={pending} busy={busy} error={error} initializing={legacy && !state?.verifier} approvalUrl={approvalUrl} approvalCode={pendingRequest?.code} passkeyRestoreIds={passkeyRestores} onFindPasskeyRestores={() => { void findPasskeyRestores().then(setPasskeyRestores).catch(cause => setError(cause instanceof Error ? cause.message : 'Could not find passkey devices.')); }} onRestorePasskey={id => { void restorePasskeyDevice(id).then(() => setPasskeyRestores([])).catch(cause => setError(cause instanceof Error ? cause.message : 'Could not restore passkey device.')); }} onLegacyUnlock={handleLegacyUnlock} onRememberedUnlock={() => void unlockDevice('remembered')} onPasskeyUnlock={() => void unlockDevice('passkey-prf')} onEnroll={mode => void enroll(mode)} onCheckApproval={() => void unlockDevice(deviceState?.protectionMode ?? 'remembered')} onRecover={(phrase, mode) => { void recoverDevice(phrase, mode).then(() => unlockDevice(mode)).catch(cause => setError(cause instanceof Error ? cause.message : 'Recovery failed.')); }} onRetry={() => void refreshSettings()} onSignOut={() => void signOut()} />;
     }

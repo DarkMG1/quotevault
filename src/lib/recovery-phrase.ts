@@ -45,3 +45,10 @@ export function confirmRecoveryPhrase(words: unknown, answers: unknown, position
   if (new Set(positions).size !== 3 || positions.some(position => !Number.isInteger(position) || position < 0 || position >= 16)) return false;
   return positions.every((position, index) => answers[index] === words[position]);
 }
+
+/** Typed or pasted phrases may differ in case and whitespace from the saved `words.join(' ')`. */
+export function normalizeRecoveryPhrase(phrase: string): string {
+  const words = phrase.trim().toLowerCase().split(/\s+/);
+  if (words.length !== 16 || words.some(word => !WORDS.includes(word))) throw new Error('Enter all 16 recovery words.');
+  return words.join(' ');
+}

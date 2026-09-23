@@ -114,8 +114,8 @@ export const validSessionInvalidation = (value: unknown, ownerId: string): boole
   return Object.keys(result).length === 2 && result.owner_id === ownerId && result.status === 'removed';
 };
 
-const serve = async (request: Request): Promise<Response> => {
-  if (request.method === 'OPTIONS') return new Response(null, { headers: { 'access-control-allow-origin': 'https://quotes.darkmg1.dev', 'access-control-allow-headers': 'authorization, content-type', 'access-control-allow-methods': 'POST, OPTIONS', 'vary': 'Origin' } });
+export const serve = async (request: Request): Promise<Response> => {
+  if (request.method === 'OPTIONS') return new Response(null, { headers: { 'access-control-allow-origin': 'https://quotes.darkmg1.dev', 'access-control-allow-headers': 'authorization, x-client-info, apikey, content-type', 'access-control-allow-methods': 'POST, OPTIONS', 'vary': 'Origin' } });
   if (request.method !== 'POST') return reply(405, { error: 'method_not_allowed' });
   const url = Deno.env.get('SUPABASE_URL');
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY');

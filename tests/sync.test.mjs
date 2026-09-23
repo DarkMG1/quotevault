@@ -661,4 +661,50 @@ await (async () => {
   assert.match(provider.states[2], /Offline/, 'offline refresh explains that changes remain local');
 })();
 
+await (async () => {
+  const { sync, navigator } = setup();
+  let authorizations = 0;
+  navigator.locks = { request: (_name, run) => Promise.resolve().then(run) };
+  const running = sync.processSyncQueue({ actorId: 'u1', generation: 'g1', getDeviceAuthorization: async () => {
+    authorizations++; return { deviceId: '11111111-1111-4111-8111-111111111111', token: 'transient-token' };
+  } });
+  sync.cancelSyncRequests();
+  await running;
+  assert.equal(authorizations, 0, 'a sync cancelled while waiting for the cross-tab lock never requests device authorization');
+})();
+
+await (async () => {
+  const { db, sync } = setup(() => ({ generation: 'g2', revision: 7, results: [], quotes: [] }));
+  await db.quotes.put(quote('shared-cache'));
+  await db.metadata.put({ id: 'sync-revision:u1:g2', value: 7 });
+  await sync.processSyncQueue({ actorId: 'u1', generation: 'g1', onGenerationMismatch: () => {} });
+  assert.equal(db.quotes.rows.size, 0);
+  assert.equal(db.metadata.rows.has('sync-revision:u1:g2'), false, 'clearing the shared cache forces every tab to fetch a full snapshot');
+})();
+
+await (async () => {
+  const { db, sync } = setup();
+  const original = quote('rejected-old', 'old-generation');
+  original.privatePayload = { ...original, text: 'private quote', author: 'Alice', context: null };
+  await db.syncQueue.put({ id: 'rejected-old', operation_id: 'rejected-old', action: 'INSERT', quote_id: original.id,
+    actor_id: 'u1', vault_generation: 'old-generation', payload: original, created_at: original.created_at, status: 'rejected', error: 'denied' });
+  const acknowledgements = [];
+  assert.equal(await sync.convertQueuedOperations({ actorId: 'u1', generation: 'new-generation', currentKey: {},
+    getSourceKey: async () => ({}), acknowledgeSource: async generation => acknowledgements.push(generation) }), 1);
+  const next = [...db.syncQueue.rows.values()][0];
+  assert.equal(next.vault_generation, 'new-generation');
+  assert.equal(next.status, 'rejected', 'rejected older work stays visible as rejected in the current generation');
+  assert.equal(next.error, 'denied');
+  assert.deepEqual(acknowledgements, ['old-generation'], 'rejected older work no longer blocks the conversion acknowledgement');
+})();
+
+await (async () => {
+  const { db, sync } = setup();
+  const acknowledged = [];
+  assert.equal(await sync.acknowledgeEmptyConversion('u1', 'old-generation', async generation => { acknowledged.push(generation); }), true);
+  await enqueue(db, sync, 'INSERT', quote('still-old', 'old-generation'), 'u1', 'old-generation');
+  assert.equal(await sync.acknowledgeEmptyConversion('u1', 'old-generation', async generation => { acknowledged.push(generation); }), false);
+  assert.deepEqual(acknowledged, ['old-generation'], 'only an empty queue releases the conversion wrapper at unlock');
+})();
+
 console.log('sync queue regression tests passed');

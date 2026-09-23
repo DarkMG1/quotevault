@@ -56,3 +56,10 @@ Deno.test('session invalidation accepts only the exact server proof for the requ
     || validSessionInvalidation({ owner_id: ownerId, status: 'active' }, ownerId)
     || validSessionInvalidation({ owner_id: ownerId, status: 'removed', extra: true }, ownerId)) throw new Error('session invalidation proof was not exact');
 });
+
+Deno.test('CORS preflight allows every header supabase-js sends', async () => {
+  const { serve } = await import('./index.ts');
+  const response = await serve(new Request('https://edge.invalid/vault-security', { method: 'OPTIONS', headers: { origin: 'https://quotes.darkmg1.dev', 'access-control-request-headers': 'apikey, authorization, content-type, x-client-info' } }));
+  const allowed = (response.headers.get('access-control-allow-headers') ?? '').split(',').map(value => value.trim().toLowerCase());
+  for (const header of ['apikey', 'authorization', 'content-type', 'x-client-info']) if (!allowed.includes(header)) throw new Error(`preflight rejects ${header}`);
+});

@@ -29,7 +29,14 @@ private `quotevault-sync` channel. Verify its membership policy on
 `realtime.messages`, anonymous denial, and inability for clients to publish a
 reset signal. Public-channel clients from older releases may need to reload.
 Do not reapply the old migration after the new one; that would replace newer
-function bodies with their older definitions.
+function bodies with their older definitions. If an older migration was reapplied by
+mistake, reapply `20260922140000_audit_fixes.sql`; it revokes the device-less RPC
+overloads that older files recreate.
+
+Staging a migration wraps the new vault key only for device and recovery keys
+attested under the current key. Devices attest themselves when unlocked and
+recovery keys when created, so a device that has not unlocked in the current
+generation appears as `missing_device_wrapper` until it unlocks once.
 
 ### Device-envelope rollout
 
@@ -60,8 +67,9 @@ in order, `20260922000000_checked_import.sql`,
 `20260922090000_device_authorized_rpc_fixes.sql`,
 `20260922100000_device_recovery_requirement.sql`,
 `20260922110000_bootstrap_state_rpc.sql`,
-`20260922120000_envelope_migration.sql`, and
-`20260922130000_envelope_rotation.sql`. Never apply these files out of order
+`20260922120000_envelope_migration.sql`,
+`20260922130000_envelope_rotation.sql`, and
+`20260922140000_audit_fixes.sql`. Never apply these files out of order
 or by copying individual function bodies into the SQL editor. Read back
 `vault_state.envelope_status` and confirm it is still `legacy` after the
 migrations.

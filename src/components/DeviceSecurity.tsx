@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Loader2, RefreshCw, Trash2 } from 'lucide-react';
 import { listOwnDevices, revokeOwnDevice, type DeviceSummary } from '../lib/device';
 import { useCrypto } from '../hooks/useCrypto';
+import { db } from '../lib/db';
 import { confirmRecoveryPhrase, generateRecoveryPhrase, recoveryConfirmationPositions } from '../lib/recovery-phrase';
 
 const time = (value: string | null) => value ? new Date(value).toLocaleString() : 'Never';
@@ -12,8 +13,8 @@ export function DeviceSecurity() {
     const refresh = async () => { setBusy('refresh'); setError(''); try { setDevices(await listOwnDevices()); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load devices.'); } finally { setBusy(''); } };
     // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { void refresh(); }, []);
-    const revoke = async (id: string) => { setBusy(id); setError(''); try { const auth = await getDeviceAuthorization(); await revokeOwnDevice(id, auth.token); await refresh(); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not revoke device.'); } finally { setBusy(''); } };
-    const forget = async () => { setBusy('forget'); setError(''); try { await forgetDevice(); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not forget this device.'); } finally { setBusy(''); } };
+    const revoke = async (id: string) => { setBusy(id); setError(''); try { const auth = await getDeviceAuthorization(); await revokeOwnDevice(auth.deviceId, auth.token, id); await refresh(); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not revoke device.'); } finally { setBusy(''); } };
+    const forget = async () => { if (await db.syncQueue.count() && !window.confirm('This device has changes that have not synced. Forgetting it deletes them permanently. Continue?')) return; setBusy('forget'); setError(''); try { await forgetDevice(); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not forget this device.'); } finally { setBusy(''); } };
     const startRecovery = () => { setPhrase(generateRecoveryPhrase()); setPositions(recoveryConfirmationPositions()); setAnswers(['', '', '']); setReplace(false); };
     const saveRecovery = async () => { if (!phrase || !confirmRecoveryPhrase(phrase, answers, positions)) { setError('Enter the requested recovery words exactly.'); return; } setBusy('recovery'); setError(''); try { await setupRecovery(phrase.join(' '), replace); setPhrase(null); setPositions([]); setAnswers(['', '', '']); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save recovery phrase.'); } finally { setBusy(''); } };
     const enroll = async (mode: 'remembered' | 'passkey-prf') => { setBusy(mode); setError(''); try { await enrollDevice(mode); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not request this device.'); } finally { setBusy(''); } };

@@ -194,3 +194,35 @@ test('refreshes a changed source before staging and waits for new device reports
   assert.equal(result.stagedQuoteCount, 0);
   assert.equal(calls.some(call => call.name === 'stage_envelope_wrappers' || call.name === 'stage_envelope_quotes'), false);
 });
+
+test('wraps the target key only for public keys attested under the source key', async () => {
+  const sourceKey = await cryptoApi.deriveEncryptionKey('attested-migration-source');
+  const targetMasterKey = deviceCrypto.generateVaultMasterKey();
+  const keyPair = () => webcrypto.subtle.generateKey({ name: 'RSA-OAEP', modulusLength: 3072, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['encrypt', 'decrypt']);
+  const [trusted, injected, swapped] = await Promise.all([keyPair(), keyPair(), keyPair()]);
+  const jwk = pair => webcrypto.subtle.exportKey('jwk', pair.publicKey);
+  const ids = ['55555555-5555-4555-8555-555555555555', '66666666-6666-4666-8666-666666666666', '77777777-7777-4777-8777-777777777777'];
+  const calls = [];
+  const rpc = async (name, args) => {
+    calls.push({ name, args });
+    if (name === 'get_pending_envelope_migration') return response(null);
+    if (name === 'refresh_envelope_migration_source') return response({ migration_id: DEVICE, status: 'staging', source_generation: SOURCE_GENERATION, source_revision: 4, expected_quote_count: 0, reset: false });
+    if (name === 'stage_envelope_wrappers') return response({ migration_id: DEVICE, status: 'ready', staged_quote_count: 0 });
+    if (name === 'attest_vault_keys') return response(null);
+    throw new Error(`unexpected RPC ${name}`);
+  };
+  const migration = loadMigration(rpc);
+  const trustedFingerprint = await deviceCrypto.fingerprintPublicJwk(await jwk(trusted));
+  const deviceWrappers = [
+    { id: ids[0], publicJwk: await jwk(trusted), attestation: await migration.createKeyAttestation(sourceKey, 'device', ids[0], SOURCE_GENERATION, trustedFingerprint) },
+    { id: ids[1], publicJwk: await jwk(injected) },
+    { id: ids[2], publicJwk: await jwk(swapped), attestation: await migration.createKeyAttestation(sourceKey, 'device', ids[2], SOURCE_GENERATION, trustedFingerprint) },
+  ];
+  await migration.runEnvelopeMigration({ sourceGeneration: SOURCE_GENERATION, sourceRevision: 4, sourceKey, sourceQuotes: [], targetGeneration: TARGET_GENERATION, targetMasterKey, migrationId: DEVICE, deviceId: DEVICE, token: 'transient-device-token', actorId: ACTOR, encryptedExportConfirmed: true, deviceWrappers });
+  const staged = calls.find(call => call.name === 'stage_envelope_wrappers').args.p_devices;
+  assert.equal(JSON.stringify(staged.map(item => item.device_id)), JSON.stringify([ids[0]]), 'unattested or swapped public keys never receive the target key');
+  const attested = calls.find(call => call.name === 'attest_vault_keys').args;
+  assert.equal(attested.p_generation, TARGET_GENERATION);
+  const targetKey = await deviceCrypto.deriveQuoteKey(targetMasterKey, TARGET_GENERATION);
+  assert.equal(await migration.verifyKeyAttestation(attested.p_devices[0].attestation, targetKey, 'device', ids[0], TARGET_GENERATION, trustedFingerprint), true, 'staging re-attests the key for the next rotation');
+});

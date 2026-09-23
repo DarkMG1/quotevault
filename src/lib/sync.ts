@@ -119,10 +119,17 @@ const sameQueueItem = (left: SyncQueueItem, right: SyncQueueItem) =>
  * operation to the server. The source key is caller-owned and remains in this
  * function's memory only.
  */
+/** A device with no queued work from a replaced generation releases that generation's conversion wrapper. */
+export async function acknowledgeEmptyConversion(actorId: string, sourceGeneration: string, acknowledge: (sourceGeneration: string) => Promise<void>): Promise<boolean> {
+    if ((await db.syncQueue.toArray()).some(item => item.actor_id === actorId && item.vault_generation === sourceGeneration)) return false;
+    await acknowledge(sourceGeneration);
+    return true;
+}
+
 export async function convertQueuedOperations(context: QueueConversionContext): Promise<number> {
     if (!context.actorId || !context.generation || !context.currentKey) throw new Error('Current vault encryption is unavailable.');
     const queued = (await db.syncQueue.toArray()).filter(item =>
-        item.actor_id === context.actorId && item.vault_generation && item.vault_generation !== context.generation && item.status !== 'rejected'
+        item.actor_id === context.actorId && item.vault_generation && item.vault_generation !== context.generation
     );
     const ackPrefix = `conversion-ack:${context.actorId}:${context.generation}:`;
     const savedAcks = context.acknowledgeSource
@@ -173,6 +180,7 @@ export async function convertQueuedOperations(context: QueueConversionContext): 
                 continue;
             }
             if (context.isActive && !context.isActive()) throw new Error('Vault access changed; retry conversion after unlocking.');
+            if (original.status === 'rejected') { replacement.status = 'rejected'; replacement.error = original.error; }
             const replacementId = crypto.randomUUID();
             replacement.id = replacementId;
             replacement.operation_id = replacementId;
@@ -259,9 +267,11 @@ async function mergeSnapshot(snapshot: Quote[], context: SyncContext) {
 }
 
 async function rejectStaleGeneration(context: SyncContext, epoch: number) {
-    await db.transaction('rw', db.quotes, db.syncQueue, async () => {
+    await db.transaction('rw', db.quotes, db.syncQueue, db.metadata, async () => {
         if (epoch !== syncEpoch) return;
         await db.quotes.clear();
+        // The cleared cache is shared by every tab; their revisions no longer describe it.
+        for (const item of await db.metadata.toArray()) if (item.id.startsWith('sync-revision:')) await db.metadata.delete(item.id);
         const stale = (await db.syncQueue.toArray()).filter(item => item.vault_generation === context.generation);
         for (const item of stale) await db.syncQueue.update(item.id, { status: 'blocked', error: 'Vault encryption changed. Convert this saved change after unlocking the current vault.' });
     });
@@ -423,7 +433,7 @@ async function syncBatch(context: SyncContext, epoch: number, authorization: Dev
 async function sync(context: SyncContext, epoch: number) {
     let performed = false;
     let revision = 0;
-    if (!navigator.onLine) return performed;
+    if (!navigator.onLine || epoch !== syncEpoch) return performed;
     const authorization = context.getDeviceAuthorization ? await context.getDeviceAuthorization() : null;
     while (epoch === syncEpoch) {
         const request = syncRequest;

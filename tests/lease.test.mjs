@@ -38,6 +38,11 @@ test('lease verification rejects invalid signatures and bound claims', async () 
   assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(lease, publicJwk, { ...expected(), accountId: 'account-b' }), false);
   assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(lease, publicJwk, { ...expected(), generation: 'generation-b' }), false);
   assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(lease, publicJwk, { ...expected(), publicKeyFingerprint: 'fingerprint-b' }), false);
-  assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(await signFixture({ 4: NOW + 1 }), publicJwk, expected()), false);
+  assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(await signFixture({ 4: NOW + 10 * 60 * 1000, 5: NOW + 10 * 60 * 1000 + 30 * DAY }), publicJwk, expected()), false);
   assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(await signFixture({ 5: NOW + 29 * DAY }), publicJwk, expected()), false);
+});
+
+test('a fresh lease verifies on a client clock slightly behind the server', async () => {
+  const lease = await signFixture();
+  assert.equal(await leaseApi.verifyDeviceLeaseWithPublicKey(lease, publicJwk, { ...expected(), now: NOW - 2000 }), true);
 });
