@@ -70,19 +70,16 @@ export function useModalDialog(
             event.preventDefault();
             onCloseRef.current();
         };
-        let focusFrame: number | undefined;
-
         if (isOpen) {
             if (!dialog.open) dialog.showModal();
             dialog.addEventListener('cancel', handleCancel);
-            focusFrame = requestAnimationFrame(() => initialFocusRef.current?.focus());
+            initialFocusRef.current?.focus();
         } else if (dialog.open) {
             dialog.close();
         }
 
         return () => {
             dialog.removeEventListener('cancel', handleCancel);
-            if (focusFrame !== undefined) cancelAnimationFrame(focusFrame);
             if (dialog.open) dialog.close();
             if (isOpen) opener?.focus();
         };

@@ -189,7 +189,7 @@ test('offline sign-out locks immediately and cannot revive cached access on relo
 test('a membership denial locks an already unlocked local vault and removes offline preparation', async ({ page, context }) => {
   await prepareDevice(page);
   const release = Promise.withResolvers<void>();
-  await page.route('**/rest/v1/rpc/get_vault_state', async route => {
+  await page.route('**/rest/v1/rpc/get_vault_bootstrap_state', async route => {
     await release.promise;
     await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ code: '42501', message: 'Vault membership denied' }) });
   });
@@ -202,8 +202,8 @@ test('a membership denial locks an already unlocked local vault and removes offl
   await context.setOffline(true);
   await page.reload();
   await expect(page.getByRole('alert')).toContainText('Connect once');
-  await page.getByLabel('Group Vault Key').fill('demo-vault-key');
-  await expect(page.getByRole('button', { name: 'Unlock Vault', exact: true })).toBeDisabled();
+  await expect(page.getByLabel('Group Vault Key')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Add quote', exact: true })).toHaveCount(0);
 });
 
 test('a second tab cannot revive access during pending online sign-out', async ({ page, context }) => {

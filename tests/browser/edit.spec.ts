@@ -43,7 +43,10 @@ async function storedPayload(page: Page, quote = imported) {
     const payload = JSON.parse(row.text.slice('$$E2E$$'.length));
     const material = await crypto.subtle.importKey('raw', new TextEncoder().encode('demo-vault-key'), 'PBKDF2', false, ['deriveKey']);
     const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: Uint8Array.from(atob(state.kdf.salt), char => char.charCodeAt(0)), iterations: state.kdf.iterations, hash: 'SHA-256' }, material, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-    const clear = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Uint8Array.from(atob(payload.iv), char => char.charCodeAt(0)) }, key, Uint8Array.from(atob(payload.data), char => char.charCodeAt(0)));
+    const [timestamp, fraction = ''] = row.created_at.replace('+00:00', 'Z').slice(0, -1).split('.');
+    const canonical = `${timestamp}${fraction.replace(/0+$/, '') ? `.${fraction.replace(/0+$/, '')}` : ''}Z`;
+    const additionalData = payload.version === 2 ? new TextEncoder().encode(JSON.stringify([2, row.id, row.vault_generation, row.user_id, canonical, row.quote_date ?? null])) : undefined;
+    const clear = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Uint8Array.from(atob(payload.iv), char => char.charCodeAt(0)), ...(additionalData ? { additionalData } : {}) }, key, Uint8Array.from(atob(payload.data), char => char.charCodeAt(0)));
     return { ciphertext: row.text, payload: JSON.parse(new TextDecoder().decode(clear)) };
   }, quote);
 }

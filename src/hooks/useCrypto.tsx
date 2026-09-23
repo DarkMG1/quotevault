@@ -51,7 +51,8 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
     }, [canSync, clearKeys, userId]);
     // Settings are external state; cancellation counters prevent stale writes.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    useEffect(() => { const settingsRequest = request; const settingsUnlock = unlockRequest; void refreshSettings(); return () => { settingsRequest.current++; settingsUnlock.current++; clearKeys(); }; }, [clearKeys, refreshSettings]);
+    useEffect(() => { const settingsRequest = request; const settingsUnlock = unlockRequest; void refreshSettings(); return () => { settingsRequest.current++; settingsUnlock.current++; }; }, [refreshSettings]);
+    useEffect(() => () => clearKeys(), [clearKeys, userId]);
     const lockVault = useCallback((expired = false) => { unlockRequest.current++; clearKeys(); setLeaseExpired(expired); setError(''); if (isLegacyVaultState(stateRef.current)) { stateRef.current = null; setState(null); setBusy(true); void refreshSettings(); } }, [clearKeys, refreshSettings]);
     const validLease = useCallback((local: DeviceLocalState, generation: string, now = Date.now()) => local.lease ? verifyDeviceLease(local.lease, { now, deviceId: local.deviceId, accountId: local.accountId, generation, publicKeyFingerprint: local.publicKeyFingerprint }) : Promise.resolve(false), []);
     const unlockDevice = useCallback(async (mode: 'remembered' | 'passkey-prf') => {

@@ -58,7 +58,7 @@ http.createServer(async (req, res) => {
     response = { access_token: tokenFor(member), refresh_token: 'test-refresh', token_type: 'bearer', expires_in: 3600, user: member };
   } else if (path === '/auth/v1/user') response = userFromRequest(req);
   else if (path === '/auth/v1/logout') { res.writeHead(204).end(); return; }
-  else if (path === '/rest/v1/rpc/get_vault_state') response = { envelope_status: 'legacy', generation, legacy_generation: null, prepared_generation: null, ...config };
+  else if (path === '/rest/v1/rpc/get_vault_state' || path === '/rest/v1/rpc/get_vault_bootstrap_state') response = { envelope_status: 'legacy', generation, legacy_generation: null, prepared_generation: null, ...config };
   else if (path === '/rest/v1/rpc/sync_quotes') {
     const results = [];
     for (const operation of body.p_operations || []) {
