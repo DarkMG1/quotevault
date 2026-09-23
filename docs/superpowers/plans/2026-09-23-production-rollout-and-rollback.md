@@ -812,6 +812,8 @@ Expected: archive + `.sha256` written; verify-restore exit 0.
 
 **Rollback:** data is untouched. If Step 3 fails, freeze writes (tell members), restore schema from the Task 7 dump into a fresh branch database to diagnose; do **not** `pg_restore` over production without explicit approval, because quotes written after the backup would be lost.
 
+**Task 8 results (2026-09-23):** pg_cron enabled; `supabase db push` applied `20260922020000`…`20260923000000` without error. Read-only probe: 224 quotes, `id_digest`/`ciphertext_digest`/generation identical to baseline, `envelope_status legacy`, legacy mode open; pgcrypto lives in `extensions` and `begin_recovery` resolves it; purge job scheduled; anon denied on devices, sync, reversion; legacy 3-arg sync overload gone; `quotes` out of the realtime publication. Old frontend smoke test (fresh incognito session) passed; after it: 224 quotes, digests identical, revision 391→394. A regular browser showed a pre-`50f226a` build cached by its service worker ("Master Vault Key", `app_settings` denied since the Sept 20 migration) — stale devices need all tabs closed or a service-worker update.
+
 ### Task 9: Edge Function and lease keys
 
 - [ ] **Step 1** — Generate the lease keypair locally, never printing the private half to a file:
@@ -827,6 +829,8 @@ Add `VITE_DEVICE_LEASE_PUBLIC_JWK=<public JSON>` to `.env`; run `node scripts/ch
 - [ ] **Step 3** — `supabase functions deploy vault-security --project-ref umcprnfdaomntzhvmaoc`. Verify preflight: `curl -si -X OPTIONS https://umcprnfdaomntzhvmaoc.supabase.co/functions/v1/vault-security -H 'Origin: https://quotes.darkmg1.dev' -H 'Access-Control-Request-Headers: apikey, authorization, content-type, x-client-info' | grep -i access-control-allow-headers` lists all four.
 
 **Rollback:** the old frontend never calls the function; `supabase functions delete vault-security` if desired.
+
+**Task 9 results (2026-09-23):** lease key pair generated in memory; private JWK stored only via `supabase secrets set --env-file` (temp file removed with `rm -P`); public JWK appended to `.env` and validated by `scripts/check-client-env.mjs`; `vault-security` deployed with `--use-api`. External checks: preflight allows `authorization, x-client-info, apikey, content-type` for origin `https://quotes.darkmg1.dev`; unauthenticated POST returns 401.
 
 ### Task 10: Deploy the new frontend (vault still shared-key)
 
