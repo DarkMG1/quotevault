@@ -94,12 +94,13 @@ create or replace function public.stage_envelope_quotes(p_migration_id uuid, p_d
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $stage$
 declare state public.vault_state%rowtype; migration public.vault_migrations%rowtype; authorized jsonb; row jsonb; row_id uuid; existing jsonb;
 begin
+  -- Mutating migration RPCs lock state, migration, then qv_authorize_device's device row.
   if public.qv_is_admin() is not true or jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) not between 1 and 50 or octet_length(p_rows::text)>921600 then raise exception 'Invalid migration staging request' using errcode='22023'; end if;
   select * into state from public.vault_state where singleton for update;
-  authorized:=public.qv_authorize_device(p_device_id,p_token,state.generation,'state');
-  if authorized is null then raise exception 'Migration device is not authorized' using errcode='42501'; end if;
   select * into migration from public.vault_migrations where id=p_migration_id for update;
   if not found or migration.status not in ('staging','ready') or state.envelope_status<>'preparing' or state.active_migration_id is distinct from migration.id then raise exception 'Migration is not staging' using errcode='40001'; end if;
+  authorized:=public.qv_authorize_device(p_device_id,p_token,state.generation,'state');
+  if authorized is null then raise exception 'Migration device is not authorized' using errcode='42501'; end if;
   for row in select value from jsonb_array_elements(p_rows) loop
     if public.qv_valid_migration_v2_quote(row,migration.target_generation) is not true then raise exception 'Invalid target envelope' using errcode='22023'; end if;
     row_id:=(row->>'id')::uuid;
@@ -107,7 +108,7 @@ begin
     if found then if existing is distinct from row then raise exception 'Staged quote replay changed' using errcode='40001'; end if;
     else insert into public.vault_migration_quote_copies(migration_id,copy_kind,quote_id,encrypted_row,vault_generation) values(migration.id,'staged',row_id,row,migration.target_generation); end if;
   end loop;
-  if public.qv_migration_ready(migration) then update public.vault_migrations set status='ready' where id=migration.id; migration.status:='ready'; end if;
+  if public.qv_migration_ready(migration) then update public.vault_migrations set status='ready' where id=migration.id; migration.status:='ready'; else update public.vault_migrations set status='staging' where id=migration.id; migration.status:='staging'; end if;
   return jsonb_build_object('migration_id',migration.id,'status',migration.status,'staged_quote_count',(select count(*) from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='staged'));
 end $stage$;
 
@@ -116,10 +117,11 @@ returns jsonb language plpgsql security definer set search_path = public, pg_tem
 declare state public.vault_state%rowtype; migration public.vault_migrations%rowtype; authorized jsonb; item jsonb; target_id uuid; key text;
 begin
   if public.qv_is_admin() is not true or jsonb_typeof(p_devices)<>'array' or jsonb_typeof(p_recoveries)<>'array' or jsonb_array_length(p_devices)>200 or jsonb_array_length(p_recoveries)>200 or octet_length((p_devices||p_recoveries)::text)>500000 then raise exception 'Invalid migration wrapper request' using errcode='22023'; end if;
-  select * into state from public.vault_state where singleton for update; authorized:=public.qv_authorize_device(p_device_id,p_token,state.generation,'state');
-  if authorized is null then raise exception 'Migration device is not authorized' using errcode='42501'; end if;
+  select * into state from public.vault_state where singleton for update;
   select * into migration from public.vault_migrations where id=p_migration_id for update;
   if not found or migration.status not in ('staging','ready') or state.envelope_status<>'preparing' or state.active_migration_id is distinct from migration.id then raise exception 'Migration is not staging' using errcode='40001'; end if;
+  authorized:=public.qv_authorize_device(p_device_id,p_token,state.generation,'state');
+  if authorized is null then raise exception 'Migration device is not authorized' using errcode='42501'; end if;
   for item in select value from jsonb_array_elements(p_devices) loop
     if jsonb_typeof(item)<>'object' or item ?& array['device_id','wrapped_key'] is not true or exists(select 1 from jsonb_object_keys(item) k where k not in ('device_id','wrapped_key')) or public.qv_base64url_bytes(item->>'wrapped_key',384) is null then raise exception 'Invalid migration wrapper' using errcode='22023'; end if;
     target_id:=(item->>'device_id')::uuid; if not exists(select 1 from public.vault_devices where id=target_id and status='active') then raise exception 'Invalid migration wrapper' using errcode='22023'; end if;
@@ -134,7 +136,7 @@ begin
     if found and key is distinct from item->>'wrapped_key' then raise exception 'Staged wrapper replay changed' using errcode='40001'; end if;
     insert into public.vault_recovery_wrappers(recovery_key_id,generation,wrapped_key,created_by_device_id) values(target_id,migration.target_generation,item->>'wrapped_key',p_device_id) on conflict (recovery_key_id,generation) do nothing;
   end loop;
-  if public.qv_migration_ready(migration) then update public.vault_migrations set status='ready' where id=migration.id; migration.status:='ready'; end if;
+  if public.qv_migration_ready(migration) then update public.vault_migrations set status='ready' where id=migration.id; migration.status:='ready'; else update public.vault_migrations set status='staging' where id=migration.id; migration.status:='staging'; end if;
   return jsonb_build_object('migration_id',migration.id,'status',migration.status);
 end $wrappers$;
 
@@ -142,7 +144,7 @@ create or replace function public.get_pending_envelope_migration(p_device_id uui
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $pending$
 declare state public.vault_state%rowtype; migration public.vault_migrations%rowtype;
 begin
-  if public.qv_is_admin() is not true then raise exception 'QuoteVault administrator membership is required' using errcode='42501'; end if;
+  if public.qv_is_admin() is not true or public.qv_is_member() is not true then raise exception 'QuoteVault administrator membership is required' using errcode='42501'; end if;
   select * into state from public.vault_state where singleton;
   if state.envelope_status not in ('preparing','maintenance') or state.active_migration_id is null then return null; end if;
   select * into migration from public.vault_migrations where id=state.active_migration_id and status in ('staging','ready','activated');
@@ -163,37 +165,38 @@ returns jsonb language plpgsql security definer set search_path = public, pg_tem
 declare state public.vault_state%rowtype; migration public.vault_migrations%rowtype; reported_at timestamptz;
 begin
   select * into state from public.vault_state where singleton for update;
-  if public.qv_authorize_device(p_device_id,p_token,state.generation,'state') is null then raise exception 'Migration device is not authorized' using errcode='40001'; end if;
   select * into migration from public.vault_migrations where id=p_migration_id for update;
   if migration.id is null or migration.status not in ('staging','ready') or state.envelope_status<>'preparing' or state.active_migration_id is distinct from migration.id then raise exception 'Migration is not staging' using errcode='40001'; end if;
+  if public.qv_authorize_device(p_device_id,p_token,state.generation,'state') is null then raise exception 'Migration device is not authorized' using errcode='40001'; end if;
   insert into public.vault_migration_queue_reports(migration_id,device_id,reported_at) values(migration.id,p_device_id,now())
   on conflict (migration_id,device_id) do update set reported_at=excluded.reported_at returning public.vault_migration_queue_reports.reported_at into reported_at;
-  if public.qv_migration_ready(migration) then update public.vault_migrations set status='ready' where id=migration.id; migration.status:='ready'; end if;
+  if public.qv_migration_ready(migration) then update public.vault_migrations set status='ready' where id=migration.id; migration.status:='ready'; else update public.vault_migrations set status='staging' where id=migration.id; migration.status:='staging'; end if;
   return jsonb_build_object('migration_id',migration.id,'status',migration.status,'device_id',p_device_id,'reported_at',reported_at,'ready',migration.status='ready');
 end $report$;
 
 create or replace function public.get_envelope_migration_coverage(p_migration_id uuid,p_device_id uuid,p_token text)
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $coverage$
-declare state public.vault_state%rowtype; migration public.vault_migrations%rowtype; member record; members jsonb:='[]'::jsonb; devices jsonb; recoveries jsonb; blockers jsonb;
+declare state public.vault_state%rowtype; migration public.vault_migrations%rowtype; member record; members jsonb:='[]'::jsonb; devices jsonb; recoveries jsonb; blockers jsonb; ready boolean;
 begin
-  if public.qv_is_admin() is not true then raise exception 'QuoteVault administrator membership is required' using errcode='42501'; end if;
+  if public.qv_is_admin() is not true or public.qv_is_member() is not true then raise exception 'QuoteVault administrator membership is required' using errcode='42501'; end if;
   select * into state from public.vault_state where singleton for share;
   select * into migration from public.vault_migrations where id=p_migration_id for share;
   if migration.id is null or migration.status not in ('staging','ready','activated') or state.active_migration_id is distinct from migration.id or state.envelope_status not in ('preparing','maintenance') or public.qv_migration_device_ok(p_device_id,p_token,state) is not true then raise exception 'Migration coverage is unavailable' using errcode='40001'; end if;
+  ready:=migration.status in ('staging','ready') and public.qv_migration_ready(migration);
   for member in select lower(a.email) email,u.id owner_id from public.allowlist a left join auth.users u on lower(u.email)=lower(a.email) order by a.id loop
     select coalesce(jsonb_agg(jsonb_build_object('device_id',d.id,'public_jwk',d.public_jwk,'public_key_fingerprint',d.public_key_fingerprint,'wrapper_staged',w.device_id is not null,'empty_queue_reported_at',r.reported_at) order by d.id),'[]'::jsonb) into devices from public.vault_devices d left join public.vault_device_wrappers w on w.device_id=d.id and w.generation=migration.target_generation and w.purpose='active' left join public.vault_migration_queue_reports r on r.migration_id=migration.id and r.device_id=d.id where d.owner_id=member.owner_id and d.status='active';
     select coalesce(jsonb_agg(jsonb_build_object('recovery_key_id',k.id,'public_jwk',k.public_jwk,'public_key_fingerprint',k.public_key_fingerprint,'wrapper_staged',w.recovery_key_id is not null) order by k.id),'[]'::jsonb) into recoveries from public.vault_recovery_keys k left join public.vault_recovery_wrappers w on w.recovery_key_id=k.id and w.generation=migration.target_generation where k.owner_id=member.owner_id and k.status='active';
     blockers := (case when member.owner_id is null then jsonb_build_array('no_account') else '[]'::jsonb end)||(case when member.owner_id is not null and devices='[]'::jsonb then jsonb_build_array('no_active_device') else '[]'::jsonb end)||(case when member.owner_id is not null and recoveries='[]'::jsonb then jsonb_build_array('no_active_recovery') else '[]'::jsonb end)||(case when member.owner_id is not null and exists(select 1 from public.vault_devices d left join public.vault_device_wrappers w on w.device_id=d.id and w.generation=migration.target_generation and w.purpose='active' where d.owner_id=member.owner_id and d.status='active' and w.device_id is null) then jsonb_build_array('missing_device_wrapper') else '[]'::jsonb end)||(case when member.owner_id is not null and exists(select 1 from public.vault_recovery_keys k left join public.vault_recovery_wrappers w on w.recovery_key_id=k.id and w.generation=migration.target_generation where k.owner_id=member.owner_id and k.status='active' and w.recovery_key_id is null) then jsonb_build_array('missing_recovery_wrapper') else '[]'::jsonb end)||(case when member.owner_id is not null and exists(select 1 from public.vault_devices d left join public.vault_migration_queue_reports r on r.migration_id=migration.id and r.device_id=d.id where d.owner_id=member.owner_id and d.status='active' and (r.reported_at is null or r.reported_at<=now()-interval '15 minutes')) then jsonb_build_array('no_recent_empty_queue') else '[]'::jsonb end);
     members:=members||jsonb_build_array(jsonb_build_object('email',member.email,'member_id',member.owner_id,'devices',devices,'recovery_keys',recoveries,'blockers',blockers));
   end loop;
-  return jsonb_build_object('migration_id',migration.id,'status',migration.status,'source_generation',migration.source_generation,'target_generation',migration.target_generation,'expected_quote_count',migration.expected_quote_count,'staged_quote_count',(select count(*) from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='staged'),'queue_report_max_age_seconds',900,'members',members);
+  return jsonb_build_object('migration_id',migration.id,'status',case when migration.status='activated' then 'activated' when ready then 'ready' else 'staging' end,'ready',ready,'source_generation',migration.source_generation,'target_generation',migration.target_generation,'expected_quote_count',migration.expected_quote_count,'staged_quote_count',(select count(*) from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='staged'),'queue_report_max_age_seconds',900,'members',members);
 end $coverage$;
 
 create or replace function public.abandon_envelope_migration(p_migration_id uuid,p_device_id uuid,p_token text)
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $abandon$
 declare state public.vault_state%rowtype; migration public.vault_migrations%rowtype;
 begin
-  if public.qv_is_admin() is not true then raise exception 'QuoteVault administrator membership is required' using errcode='42501'; end if;
+  if public.qv_is_admin() is not true or public.qv_is_member() is not true then raise exception 'QuoteVault administrator membership is required' using errcode='42501'; end if;
   select * into state from public.vault_state where singleton for update;
   select * into migration from public.vault_migrations where id=p_migration_id for update;
   if p_device_id is null and p_token is null then

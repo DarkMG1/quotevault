@@ -238,6 +238,12 @@ begin
   if response->>'status'<>'ready' or response->>'ready'<>'true' then raise exception 'final queue report did not make migration ready'; end if;
   update public.vault_migration_queue_reports set reported_at=now()-interval '16 minutes' where migration_id=(migration->>'migration_id')::uuid and device_id=admin_device;
   if public.qv_migration_ready((select m from public.vault_migrations m where m.id=(migration->>'migration_id')::uuid)) then raise exception 'stale queue report was ready'; end if;
+  snapshot:=public.get_envelope_migration_coverage((migration->>'migration_id')::uuid,admin_device,token);
+  if snapshot->>'status'<>'staging' or snapshot->>'ready'<>'false' then raise exception 'coverage retained stale ready state'; end if;
+  perform set_config('request.jwt.claim.sub',member_id::text,true);
+  response:=public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,member_device,token);
+  if response->>'status'<>'staging' or response->>'ready'<>'false' then raise exception 'fresh other-device report retained stale ready state'; end if;
+  perform set_config('request.jwt.claim.sub',admin_id::text,true);
   perform public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,admin_device,token);
   response := public.activate_envelope_migration((migration->>'migration_id')::uuid,admin_device,token);
   if response->>'status' <> 'activated' or (select envelope_status from public.vault_state where singleton) <> 'maintenance'
