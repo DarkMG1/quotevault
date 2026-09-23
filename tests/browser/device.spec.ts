@@ -75,6 +75,8 @@ async function rememberedDevice(page: Page, recoverySetupRequired = false, email
   });
   await signIn(page, email);
   await expect(page.getByRole('button', { name: 'Unlock remembered device' })).toBeVisible();
+  // Opening a missing database would create an empty one; wait for the app's Dexie schema instead.
+  await page.waitForFunction(async () => (await indexedDB.databases()).some(entry => entry.name === 'QuoteVaultDB' && (entry.version ?? 0) > 1));
   await page.evaluate(async ({ state, rawKey }) => {
     const rememberedKey = await crypto.subtle.importKey('raw', new Uint8Array(rawKey), 'AES-GCM', false, ['encrypt', 'decrypt']);
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
