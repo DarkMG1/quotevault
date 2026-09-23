@@ -58,7 +58,8 @@ create or replace function public.prepare_envelope_migration(p_source_generation
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $prepare$
 declare state public.vault_state%rowtype; authorized jsonb; migration public.vault_migrations%rowtype;
 begin
-  if public.qv_is_admin() is not true or p_source_generation is null or p_source_revision is null or p_target_generation is null or p_target_generation=p_source_generation or public.qv_valid_verifier(p_target_verifier) is not true then raise exception 'Invalid migration request' using errcode='22023'; end if;
+  if public.qv_is_admin() is not true then raise exception 'QuoteVault administrator membership is required' using errcode='42501'; end if;
+  if p_source_generation is null or p_source_revision is null or p_target_generation is null or p_target_generation=p_source_generation or public.qv_valid_verifier(p_target_verifier) is not true then raise exception 'Invalid migration request' using errcode='22023'; end if;
   select * into state from public.vault_state where singleton for update;
   if state.envelope_status not in ('legacy','active') or state.active_migration_id is not null or state.generation is distinct from p_source_generation or state.revision is distinct from p_source_revision then raise exception 'Migration source changed; reload before staging' using errcode='40001'; end if;
   authorized := public.qv_authorize_device(p_device_id,p_token,state.generation,'state');

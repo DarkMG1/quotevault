@@ -55,6 +55,18 @@ begin
     raise exception 'prepare accepted source generation drift';
   exception when sqlstate '40001' then null;
   end;
+  perform set_config('request.jwt.claim.sub',member_id::text,true);
+  begin
+    perform public.prepare_envelope_migration(source_generation,source_revision,member_device,token,target_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
+    raise exception 'non-admin prepared migration';
+  exception when sqlstate '42501' then null;
+  end;
+  perform set_config('request.jwt.claim.sub',admin_id::text,true);
+  begin
+    perform public.prepare_envelope_migration(source_generation,source_revision,admin_device,'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',target_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
+    raise exception 'wrong-token prepared migration';
+  exception when sqlstate '42501' then null;
+  end;
   begin
     perform public.prepare_envelope_migration(source_generation,source_revision,admin_device,token,source_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
     raise exception 'prepare accepted identical generations';
