@@ -795,6 +795,14 @@ Expected: archive + `.sha256` written; verify-restore exit 0.
 
 **Rollback:** nothing changed.
 
+**Task 7 results (2026-09-23):**
+- Remote migration history was empty (earlier migrations were applied by hand). Read-only schema markers confirmed `20260920000000`–`20260922010000` live and every envelope migration absent; `supabase migration repair --status applied` recorded exactly those five.
+- `supabase migration list` needs the database password (`SUPABASE_DB_PASSWORD`, read with a hidden prompt); without it CLI 2.117 fails creating `cli_login_postgres`. The password was reset in the dashboard; nothing else uses it.
+- Direct connections go through the session pooler `aws-1-us-east-1.pooler.supabase.com:5432`, user `postgres.umcprnfdaomntzhvmaoc`. The pooler ignores `PGOPTIONS`; read-only probes must use `begin transaction read only` in the SQL.
+- Backup `~/.local/share/quotevault/backups/20260923T205721Z-pre-envelope/` restored locally: 224 quotes, 6 accounts, 1 vault configuration.
+- Baseline (`fingerprint-0-baseline.txt`, pre-migration query without `envelope_status`): 224 quotes, `id_digest b59b2b103bacb67df925c3b1e626e1a0`, `ciphertext_digest 14a929293800566ab408fca0d65f666f`, `v2_count 0`, generation `3194f059-d79c-4cfd-a8ca-966217aa096d`, revision 391. Compare fingerprints only through the same pooler connection (timestamps render in the session time zone).
+- Step 6 correction: release `a1bb840` has no export button (it arrives with the new frontend's migration panel, used in Task 11). The verified `pg_dump` holds all ciphertext, decryptable with the shared passphrase.
+
 ### Task 8: Apply database migrations (old frontend still serving)
 
 - [ ] **Step 0** — In the Supabase dashboard, enable the `pg_cron` extension (required by `20260922120000` for the rollback purge schedule).

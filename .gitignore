@@ -36,3 +36,6 @@ playwright-report/
 test-results/
 __pycache__/
 *.pyc
+
+# Supabase CLI link metadata (machine-local)
+supabase/.temp/
