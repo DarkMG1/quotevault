@@ -20,6 +20,8 @@ export interface VaultGateProps {
     busy?: boolean;
     error?: string;
     initializing?: boolean;
+    preparing?: boolean;
+    preparingPending?: boolean;
     onLegacyUnlock?: (event: FormEvent<HTMLFormElement>) => void;
     onRememberedUnlock?: () => void;
     onPasskeyUnlock?: () => void;
@@ -32,7 +34,7 @@ export interface VaultGateProps {
     onSignOut?: () => void;
 }
 
-export function VaultGate({ state, busy, error, initializing, onLegacyUnlock, onRememberedUnlock, onPasskeyUnlock, onEnroll, onCheckApproval, onRecover, onRetry, onSignOut, approvalUrl, approvalCode, passkeyRestoreIds, onFindPasskeyRestores, onRestorePasskey }: VaultGateProps) {
+export function VaultGate({ state, busy, error, initializing, preparing, preparingPending, onLegacyUnlock, onRememberedUnlock, onPasskeyUnlock, onEnroll, onCheckApproval, onRecover, onRetry, onSignOut, approvalUrl, approvalCode, passkeyRestoreIds, onFindPasskeyRestores, onRestorePasskey }: VaultGateProps) {
     const legacy = state === 'legacy-locked';
     const expired = state === 'lease-expired';
     const pending = state === 'pending-approval';
@@ -42,9 +44,9 @@ export function VaultGate({ state, busy, error, initializing, onLegacyUnlock, on
     return <main className="min-h-[100dvh] flex items-center justify-center bg-background p-4">
         <section className="w-full max-w-sm bg-surface p-8 rounded-3xl border border-slate-700 text-center">
             <Lock className="w-10 h-10 mx-auto text-primary-400 mb-6" aria-hidden="true" />
-            <h1 className="text-2xl font-bold mb-3">{legacy ? (initializing ? 'Initialize Group Vault' : 'Vault locked') : expired ? 'Lease expired' : pending ? 'Device approval pending' : 'Vault locked'}</h1>
+            <h1 className="text-2xl font-bold mb-3">{legacy ? (initializing ? 'Initialize Group Vault' : preparing ? 'Vault preparing' : 'Vault locked') : expired ? 'Lease expired' : pending ? 'Device approval pending' : 'Vault locked'}</h1>
             <p className="text-sm text-slate-400 mb-6">{legacy
-                ? initializing ? 'An administrator must choose a shared passphrase of at least 12 characters.' : "Enter your group's shared vault key."
+                ? initializing ? 'An administrator must choose a shared passphrase of at least 12 characters.' : preparing ? "Enter the legacy group vault key to read and write quotes. Devices enroll for the prepared vault in the background." : "Enter your group's shared vault key."
                 : expired ? 'Connect to renew this device authorization before opening encrypted quotes.'
                 : pending ? 'This device request expires in ten minutes. Approve it from an unlocked device or ask an administrator.'
                 : 'Unlock an approved device. Remembered devices use this browser profile; passkeys require user verification.'}</p>
@@ -66,6 +68,7 @@ export function VaultGate({ state, busy, error, initializing, onLegacyUnlock, on
                 <button type="button" onClick={() => setRecovery(value => !value)} disabled={busy} className="w-full text-sm text-slate-300">Use personal recovery</button>
                 {recovery && <div className="space-y-3 text-left"><label className="block text-sm text-slate-300">Recovery phrase<textarea aria-label="Recovery phrase" value={phrase} onChange={event => setPhrase(event.target.value)} className="mt-1 w-full rounded-xl bg-slate-900 border border-slate-700 p-3 text-white" /></label><button type="button" disabled={busy || !phrase.trim()} onClick={() => onRecover?.(phrase, 'remembered')} className="w-full border border-slate-600 py-2 rounded-xl">Recover remembered device</button><button type="button" disabled={busy || !phrase.trim()} onClick={() => onRecover?.(phrase, 'passkey-prf')} className="w-full border border-slate-600 py-2 rounded-xl">Recover passkey device</button></div>}
             </div>}
+            {legacy && preparing && <div className="mt-4 space-y-2"><p className="text-left text-xs text-slate-400">Enroll this browser for the prepared vault:</p>{preparingPending && <button type="button" onClick={onCheckApproval} disabled={busy} className="w-full bg-primary-600 disabled:opacity-50 py-2 rounded-xl">Check approval</button>}<button type="button" onClick={() => onEnroll?.('remembered')} disabled={busy} className="w-full text-sm text-primary-400">Remember this device</button><button type="button" onClick={() => onEnroll?.('passkey-prf')} disabled={busy} className="w-full text-sm text-primary-400">Set up a passkey device</button></div>}
             {onRetry && error && <button type="button" onClick={onRetry} className="mt-4 text-primary-400">Retry connection</button>}
             {onSignOut && <button type="button" disabled={busy} onClick={onSignOut} className="block mx-auto mt-6 text-sm text-slate-400">Sign out</button>}
         </section>

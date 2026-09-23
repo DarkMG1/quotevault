@@ -88,3 +88,10 @@ test('legacy vault mutation responses normalize only the known pre-union shape',
   assert.throws(() => app.parseLegacyVaultMutation({ ...mutation, envelope_status: 'legacy' }), /Invalid/);
   assert.throws(() => app.parseLegacyVaultMutation({ ...mutation, prepared_generation: null }), /Invalid/);
 });
+
+test('preparing vaults keep quote generation on legacy and enroll devices on prepared generation', () => {
+  const app = setup();
+  const preparing = app.parseVaultState({ ...state, envelope_status: 'preparing', prepared_generation: '22222222-2222-4222-8222-222222222222' });
+  assert.equal(app.quoteGeneration(preparing), state.generation);
+  assert.equal(app.enrollmentGeneration(preparing), preparing.prepared_generation);
+});

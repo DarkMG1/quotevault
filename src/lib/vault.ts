@@ -19,6 +19,9 @@ export function isLegacyVaultState(value: VaultState | null): value is LegacyVau
     return value?.envelope_status === 'legacy' || value?.envelope_status === 'preparing';
 }
 
+export const quoteGeneration = (state: VaultState): string => state.generation;
+export const enrollmentGeneration = (state: VaultState): string => state.envelope_status === 'preparing' && state.prepared_generation ? state.prepared_generation : state.generation;
+
 export function parseVaultState(value: unknown): VaultState {
     if (!value || typeof value !== 'object' || Array.isArray(value)) invalid();
     const state = value as Record<string, unknown>;
