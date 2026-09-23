@@ -75,6 +75,47 @@ begin
     raise exception 'prepare accepted identical generations';
   exception when sqlstate '22023' then null;
   end;
+  insert into public.quotes(id,text,author,context,quote_date,created_at,user_id,vault_generation)
+  values('12121212-1212-4121-8121-121212121212',cipher,'ENCRYPTED','ENCRYPTED',current_date,'2026-09-22T12:34:56.123456Z',admin_id,target_generation);
+  source_revision := (select revision from public.vault_state where singleton);
+  begin
+    perform public.prepare_envelope_migration(source_generation,source_revision,admin_device,token,target_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
+    raise exception 'reused quote generation was accepted';
+  exception when sqlstate '22023' then null;
+  end;
+  delete from public.quotes where id='12121212-1212-4121-8121-121212121212';
+  source_revision := (select revision from public.vault_state where singleton);
+  insert into public.vault_device_wrappers(device_id,generation,purpose,wrapped_key) values(admin_device,target_generation,'active',repeat('A',512));
+  begin
+    perform public.prepare_envelope_migration(source_generation,source_revision,admin_device,token,target_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
+    raise exception 'reused device wrapper generation was accepted';
+  exception when sqlstate '22023' then null;
+  end;
+  delete from public.vault_device_wrappers where device_id=admin_device and generation=target_generation;
+  insert into public.vault_recovery_wrappers(recovery_key_id,generation,wrapped_key) values(recovery_id,target_generation,repeat('A',512));
+  begin
+    perform public.prepare_envelope_migration(source_generation,source_revision,admin_device,token,target_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
+    raise exception 'reused recovery wrapper generation was accepted';
+  exception when sqlstate '22023' then null;
+  end;
+  delete from public.vault_recovery_wrappers where recovery_key_id=recovery_id and generation=target_generation;
+  insert into public.vault_migrations(source_generation,target_generation,target_verifier,source_revision,expected_quote_count,status,initiating_device_id,source_state)
+  values(target_generation,'13131313-1313-4131-8131-131313131313','{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}',0,0,'abandoned',admin_device,'{}');
+  begin
+    perform public.prepare_envelope_migration(source_generation,source_revision,admin_device,token,target_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
+    raise exception 'prior migration source generation was accepted';
+  exception when sqlstate '22023' then null;
+  end;
+  delete from public.vault_migrations m where m.source_generation='99999999-9999-4999-8999-999999999999' and m.target_generation='13131313-1313-4131-8131-131313131313';
+  insert into public.vault_migrations(source_generation,target_generation,target_verifier,source_revision,expected_quote_count,status,initiating_device_id,source_state)
+  values('14141414-1414-4141-8141-141414141414',target_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}',0,0,'abandoned',admin_device,'{}');
+  begin
+    perform public.prepare_envelope_migration(source_generation,source_revision,admin_device,token,target_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
+    raise exception 'prior migration target generation was accepted';
+  exception when sqlstate '22023' then null;
+  end;
+  delete from public.vault_migrations m where m.source_generation='14141414-1414-4141-8141-141414141414' and m.target_generation='99999999-9999-4999-8999-999999999999';
+  source_revision := (select revision from public.vault_state where singleton);
   abandoned := public.prepare_envelope_migration(source_generation,source_revision,admin_device,token,'99999999-9999-4999-8999-999999999998','{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
   if public.get_pending_envelope_migration(admin_device,token)->>'migration_id' <> abandoned->>'migration_id' then raise exception 'pending migration status was unavailable'; end if;
   response := public.abandon_envelope_migration((abandoned->>'migration_id')::uuid,admin_device,token);
@@ -97,6 +138,16 @@ begin
   begin
     perform public.stage_envelope_quotes((migration->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{context}','null'::jsonb)));
     raise exception 'null context target was staged';
+  exception when sqlstate '22023' then null;
+  end;
+  begin
+    perform public.stage_envelope_quotes((migration->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{created_at}','"2026-09-22T12:34:56.123Z"'::jsonb)));
+    raise exception 'short fractional timestamp was staged';
+  exception when sqlstate '22023' then null;
+  end;
+  begin
+    perform public.stage_envelope_quotes((migration->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{created_at}','"2026-09-22T12:34:56Z"'::jsonb)));
+    raise exception 'whole-second timestamp was staged';
   exception when sqlstate '22023' then null;
   end;
   begin

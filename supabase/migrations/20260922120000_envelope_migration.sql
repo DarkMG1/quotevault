@@ -30,7 +30,7 @@ begin
      or exists (select 1 from jsonb_object_keys(cipher) k where k not in ('version','iv','data'))
      or p_row->>'id' !~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
      or p_row->>'user_id' !~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
-     or p_row->>'created_at' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,6})?Z$' then return false; end if;
+     or p_row->>'created_at' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\.[0-9]{6}Z$' then return false; end if;
   if p_row->>'quote_date' is not null then perform (p_row->>'quote_date')::date; end if;
   perform (p_row->>'created_at')::timestamptz;
   return true;
@@ -65,6 +65,10 @@ begin
   if p_source_generation is null or p_source_revision is null or p_target_generation is null or p_target_generation=p_source_generation or public.qv_valid_verifier(p_target_verifier) is not true then raise exception 'Invalid migration request' using errcode='22023'; end if;
   select * into state from public.vault_state where singleton for update;
   if state.envelope_status not in ('legacy','active') or state.active_migration_id is not null or state.generation is distinct from p_source_generation or state.revision is distinct from p_source_revision then raise exception 'Migration source changed; reload before staging' using errcode='40001'; end if;
+  if exists(select 1 from public.quotes where vault_generation=p_target_generation)
+     or exists(select 1 from public.vault_device_wrappers where generation=p_target_generation)
+     or exists(select 1 from public.vault_recovery_wrappers where generation=p_target_generation)
+     or exists(select 1 from public.vault_migrations where source_generation=p_target_generation or target_generation=p_target_generation) then raise exception 'Target generation was previously used' using errcode='22023'; end if;
   authorized := public.qv_authorize_device(p_device_id,p_token,state.generation,'state');
   if authorized is null then raise exception 'Migration device is not authorized' using errcode='42501'; end if;
   insert into public.vault_migrations(source_generation,target_generation,target_verifier,source_revision,expected_quote_count,status,initiating_device_id,source_state)
@@ -127,8 +131,10 @@ returns jsonb language plpgsql security definer set search_path = public, pg_tem
 declare state public.vault_state%rowtype; migration public.vault_migrations%rowtype;
 begin
   if public.qv_is_admin() is not true then raise exception 'QuoteVault administrator membership is required' using errcode='42501'; end if;
-  select * into state from public.vault_state where singleton for share;
-  if state.envelope_status<>'preparing' or state.active_migration_id is null or public.qv_authorize_device(p_device_id,p_token,state.generation,'state') is null then return null; end if;
+  select * into state from public.vault_state where singleton;
+  if public.qv_authorize_device(p_device_id,p_token,state.generation,'state') is null then return null; end if;
+  select * into state from public.vault_state where singleton;
+  if state.envelope_status<>'preparing' or state.active_migration_id is null then return null; end if;
   select * into migration from public.vault_migrations where id=state.active_migration_id and status in ('staging','ready');
   if migration.id is null then return null; end if;
   return jsonb_build_object('migration_id',migration.id,'status',migration.status,'source_generation',migration.source_generation,'target_generation',migration.target_generation,'source_revision',migration.source_revision,'expected_quote_count',migration.expected_quote_count,'staged_quote_count',(select count(*) from public.vault_migration_quote_copies where migration_id=migration.id and copy_kind='staged'));
