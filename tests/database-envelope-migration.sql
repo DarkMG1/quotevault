@@ -23,6 +23,9 @@ declare
   row jsonb;
   source_revision bigint;
   cipher text := '$$E2E$${"version":2,"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}';
+  bootstrap_jwk jsonb := jsonb_build_object('kty','RSA','n',rtrim(replace(replace(replace(encode(decode('80'||repeat('00',383),'hex'),'base64'),E'\n',''),'+','-'),'/','_'),'='),'e','AQAB');
+  bootstrap_bundle jsonb := jsonb_build_object('version',2,'iv','AAAAAAAAAAAAAAAA','data','AAAAAAAAAAAAAAAAAAAAAA==');
+  bootstrap_fingerprint text;
 begin
   insert into public.allowlist(id,email,created_at) values
     (admin_id,'darkmgdevelopment@gmail.com',now()), (member_id,'member@example.invalid',now())
@@ -32,11 +35,23 @@ begin
     (gen_random_uuid(),member_id,'authenticated','authenticated','member@example.invalid','x',now())
   on conflict do nothing;
   source_revision := (select revision from public.vault_state where singleton);
+  bootstrap_fingerprint:=public.qv_public_key_fingerprint(bootstrap_jwk);
   perform set_config('request.jwt.claim.sub',admin_id::text,true);
   legacy_migration := public.prepare_envelope_migration(source_generation,source_revision,null,null,'33333333-3333-4333-8333-333333333333','{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
   if legacy_migration->>'status'<>'staging' or (select initiating_device_id from public.vault_migrations where id=(legacy_migration->>'migration_id')::uuid) is not null
      or (select envelope_status from public.vault_state where singleton)<>'preparing' then raise exception 'legacy prepare required a device or did not prepare'; end if;
   if public.get_pending_envelope_migration(null,null)->>'migration_id'<>legacy_migration->>'migration_id' then raise exception 'device-less legacy pending status was unavailable'; end if;
+  response:=public.request_device('23232323-2323-4232-8232-232323232323',member_id,'member bootstrap',bootstrap_jwk,token,bootstrap_fingerprint,rtrim(replace(replace(replace(encode(sha256(decode(token||'=', 'base64')),'base64'),E'\n',''),'+','-'),'/','_'),'='),'remembered','{"version":1,"mode":"remembered"}'::jsonb,bootstrap_bundle,'first');
+  begin
+    perform public.approve_device((response->>'request_id')::uuid,member_id,bootstrap_fingerprint,token,repeat('A',512),(legacy_migration->>'target_generation')::uuid,null,null);
+    raise exception 'null bootstrap approver approved another member first device';
+  exception when sqlstate '42501' then null;
+  end;
+  delete from public.vault_devices where id='23232323-2323-4232-8232-232323232323';
+  response:=public.request_device('21212121-2121-4212-8212-212121212121',admin_id,'admin bootstrap',bootstrap_jwk,token,bootstrap_fingerprint,rtrim(replace(replace(replace(encode(sha256(decode(token||'=', 'base64')),'base64'),E'\n',''),'+','-'),'/','_'),'='),'remembered','{"version":1,"mode":"remembered"}'::jsonb,bootstrap_bundle,'first');
+  response:=public.approve_device((response->>'request_id')::uuid,admin_id,bootstrap_fingerprint,token,repeat('A',512),(legacy_migration->>'target_generation')::uuid,null,null);
+  if response->>'status'<>'approved' then raise exception 'own admin first bootstrap device was rejected'; end if;
+  delete from public.vault_devices where id='21212121-2121-4212-8212-212121212121';
   perform set_config('request.jwt.claim.sub',member_id::text,true);
   begin
     perform public.get_pending_envelope_migration(null,null);
@@ -177,8 +192,34 @@ begin
     raise exception 'missing staged IDs activated';
   exception when sqlstate '40001' then null;
   end;
+  begin
+    perform public.stage_envelope_quotes((migration->>'migration_id')::uuid,admin_device,token,jsonb_build_array(row));
+    raise exception 'quote staging bypassed enrollment readiness';
+  exception when sqlstate '40001' then null;
+  end;
+  perform public.stage_envelope_wrappers((migration->>'migration_id')::uuid,admin_device,token,
+    jsonb_build_array(jsonb_build_object('device_id',admin_device,'wrapped_key',repeat('A',512)),jsonb_build_object('device_id',member_device,'wrapped_key',repeat('A',512))),
+    jsonb_build_array(jsonb_build_object('recovery_key_id',recovery_id,'wrapped_key',repeat('A',512)),jsonb_build_object('recovery_key_id',admin_recovery_id,'wrapped_key',repeat('A',512))));
+  snapshot:=public.get_envelope_migration_coverage((migration->>'migration_id')::uuid,admin_device,token);
+  if snapshot::text like '%wrapped_key%' or snapshot::text like '%encrypted_private%' or snapshot::text not like '%no_recent_empty_queue%' then raise exception 'pre-sync coverage leaked secrets or omitted queue blocker'; end if;
+  begin
+    perform public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,source_revision,admin_device,token);
+    raise exception 'queue report without successful sync was accepted';
+  exception when sqlstate '40001' then null;
+  end;
+  perform public.sync_quotes(source_generation,source_revision,'[]'::jsonb,admin_device,token);
+  begin
+    perform public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,source_revision+1,admin_device,token);
+    raise exception 'queue report with wrong source revision was accepted';
+  exception when sqlstate '40001' then null;
+  end;
+  perform set_config('request.jwt.claim.sub',member_id::text,true);
+  perform public.sync_quotes(source_generation,source_revision,'[]'::jsonb,member_device,token);
+  perform public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,source_revision,member_device,token);
+  perform set_config('request.jwt.claim.sub',admin_id::text,true);
+  perform public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,source_revision,admin_device,token);
   staged := public.stage_envelope_quotes((migration->>'migration_id')::uuid,admin_device,token,jsonb_build_array(row));
-  if staged->>'status' <> 'staging' then raise exception 'valid staged target was not staged'; end if;
+  if staged->>'status' <> 'ready' then raise exception 'valid staged target did not become ready after enrollment'; end if;
   if public.stage_envelope_quotes((migration->>'migration_id')::uuid,admin_device,token,jsonb_build_array(row)) <> staged then raise exception 'identical staging replay changed'; end if;
   begin
     perform public.stage_envelope_quotes((migration->>'migration_id')::uuid,admin_device,token,jsonb_build_array(row || jsonb_build_object('text','$$E2E$${"version":2,"iv":"AAAAAAAAAAAAAAAA","data":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="}')));
@@ -214,7 +255,7 @@ begin
   if response->>'recovery_key_id'<>recovery_id::text or response->>'generation'<>target_generation::text then raise exception 'prepared target recovery bootstrap failed'; end if;
   perform set_config('request.jwt.claim.sub',admin_id::text,true);
   snapshot := public.get_envelope_migration_coverage((migration->>'migration_id')::uuid,admin_device,token);
-  if snapshot->>'status'<>'staging' or snapshot::text like '%wrapped_key%' or snapshot::text like '%encrypted_private%' or snapshot::text not like '%no_recent_empty_queue%' or snapshot::text not like '%member@example.invalid%' then raise exception 'migration coverage leaked secrets or omitted usable blocker state'; end if;
+  if snapshot->>'status'<>'ready' or snapshot::text like '%wrapped_key%' or snapshot::text like '%encrypted_private%' or snapshot::text not like '%member@example.invalid%' then raise exception 'migration coverage leaked secrets or omitted usable blocker state'; end if;
   begin
     perform public.get_envelope_migration_coverage((migration->>'migration_id')::uuid,admin_device,'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB');
     raise exception 'wrong-token migration coverage was accepted';
@@ -226,25 +267,46 @@ begin
     raise exception 'non-admin migration coverage was accepted';
   exception when sqlstate '42501' then null;
   end;
-  response := public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,member_device,token);
-  if response->>'device_id'<>member_device::text or response->>'ready'='true' then raise exception 'first queue report bypassed remaining device'; end if;
+  response := public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,source_revision,member_device,token);
+  if response->>'device_id'<>member_device::text or response->>'ready'<>'true' then raise exception 'queue report replay lost ready state'; end if;
   perform set_config('request.jwt.claim.sub',admin_id::text,true);
   begin
-    perform public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,admin_device,'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB');
+    perform public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,source_revision,admin_device,'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB');
     raise exception 'wrong-token queue report was accepted';
   exception when sqlstate '40001' then null;
   end;
-  response := public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,admin_device,token);
+  response := public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,source_revision,admin_device,token);
   if response->>'status'<>'ready' or response->>'ready'<>'true' then raise exception 'final queue report did not make migration ready'; end if;
   update public.vault_migration_queue_reports set reported_at=now()-interval '16 minutes' where migration_id=(migration->>'migration_id')::uuid and device_id=admin_device;
   if public.qv_migration_ready((select m from public.vault_migrations m where m.id=(migration->>'migration_id')::uuid)) then raise exception 'stale queue report was ready'; end if;
   snapshot:=public.get_envelope_migration_coverage((migration->>'migration_id')::uuid,admin_device,token);
   if snapshot->>'status'<>'staging' or snapshot->>'ready'<>'false' then raise exception 'coverage retained stale ready state'; end if;
   perform set_config('request.jwt.claim.sub',member_id::text,true);
-  response:=public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,member_device,token);
+  response:=public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,source_revision,member_device,token);
   if response->>'status'<>'staging' or response->>'ready'<>'false' then raise exception 'fresh other-device report retained stale ready state'; end if;
   perform set_config('request.jwt.claim.sub',admin_id::text,true);
-  perform public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,admin_device,token);
+  perform public.report_envelope_migration_empty_queue((migration->>'migration_id')::uuid,source_revision,admin_device,token);
+  update public.vault_migration_quote_copies c set encrypted_row=jsonb_set(row,'{user_id}',to_jsonb(member_id::text)) where c.migration_id=(migration->>'migration_id')::uuid and c.copy_kind='staged' and c.quote_id=(row->>'id')::uuid;
+  begin
+    perform public.activate_envelope_migration((migration->>'migration_id')::uuid,admin_device,token);
+    raise exception 'staged user_id metadata tamper activated';
+  exception when sqlstate '40001' then null;
+  end;
+  update public.vault_migration_quote_copies c set encrypted_row=row where c.migration_id=(migration->>'migration_id')::uuid and c.copy_kind='staged' and c.quote_id=(row->>'id')::uuid;
+  update public.vault_migration_quote_copies c set encrypted_row=jsonb_set(row,'{created_at}','"2026-09-22T12:34:56.123457Z"'::jsonb) where c.migration_id=(migration->>'migration_id')::uuid and c.copy_kind='staged' and c.quote_id=(row->>'id')::uuid;
+  begin
+    perform public.activate_envelope_migration((migration->>'migration_id')::uuid,admin_device,token);
+    raise exception 'staged created_at metadata tamper activated';
+  exception when sqlstate '40001' then null;
+  end;
+  update public.vault_migration_quote_copies c set encrypted_row=row where c.migration_id=(migration->>'migration_id')::uuid and c.copy_kind='staged' and c.quote_id=(row->>'id')::uuid;
+  update public.vault_migration_quote_copies c set encrypted_row=jsonb_set(row,'{quote_date}',to_jsonb((current_date+1)::text)) where c.migration_id=(migration->>'migration_id')::uuid and c.copy_kind='staged' and c.quote_id=(row->>'id')::uuid;
+  begin
+    perform public.activate_envelope_migration((migration->>'migration_id')::uuid,admin_device,token);
+    raise exception 'staged quote_date metadata tamper activated';
+  exception when sqlstate '40001' then null;
+  end;
+  update public.vault_migration_quote_copies c set encrypted_row=row where c.migration_id=(migration->>'migration_id')::uuid and c.copy_kind='staged' and c.quote_id=(row->>'id')::uuid;
   response := public.activate_envelope_migration((migration->>'migration_id')::uuid,admin_device,token);
   if response->>'status' <> 'activated' or (select envelope_status from public.vault_state where singleton) <> 'maintenance'
      or (select vault_generation from public.quotes where id=quote_id) <> target_generation then raise exception 'activation was not atomic'; end if;
@@ -272,6 +334,24 @@ begin
     raise exception 'tampered active target finalized';
   exception when sqlstate '40001' then null;
   end;
+  begin
+    update public.vault_state set generation=gen_random_uuid() where singleton;
+    perform public.finalize_envelope_migration((migration->>'migration_id')::uuid,admin_device,token);
+    raise exception 'finalize accepted target generation drift';
+  exception when sqlstate '40001' then null;
+  end;
+  begin
+    update public.vault_state set revision=revision+1 where singleton;
+    perform public.finalize_envelope_migration((migration->>'migration_id')::uuid,admin_device,token);
+    raise exception 'finalize accepted target revision drift';
+  exception when sqlstate '40001' then null;
+  end;
+  begin
+    update public.vault_state set prepared_generation=null where singleton;
+    perform public.finalize_envelope_migration((migration->>'migration_id')::uuid,admin_device,token);
+    raise exception 'finalize accepted prepared generation drift';
+  exception when sqlstate '40001' then null;
+  end;
   perform set_config('qv.migration_internal','on',true);
   begin
     update public.vault_devices set label='attacker mutation' where id=admin_device;
@@ -297,10 +377,20 @@ begin
      or (select prepared_generation is null and active_migration_id is null from public.vault_state where singleton) is not true then raise exception 'rollback did not exactly restore source'; end if;
   retry := public.prepare_envelope_migration(source_generation,source_revision,admin_device,token,'88888888-8888-4888-8888-888888888888','{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
   if retry is null then raise exception 'rollback prevented future migration'; end if;
-  perform public.stage_envelope_quotes((retry->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{vault_generation}',to_jsonb('88888888-8888-4888-8888-888888888888'::text))));
   perform public.stage_envelope_wrappers((retry->>'migration_id')::uuid,admin_device,token,
     jsonb_build_array(jsonb_build_object('device_id',admin_device,'wrapped_key',repeat('A',512)),jsonb_build_object('device_id',member_device,'wrapped_key',repeat('A',512))),
     jsonb_build_array(jsonb_build_object('recovery_key_id',recovery_id,'wrapped_key',repeat('A',512)),jsonb_build_object('recovery_key_id',admin_recovery_id,'wrapped_key',repeat('A',512))));
+  perform public.sync_quotes(source_generation,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),'[]'::jsonb,admin_device,token);
+  perform set_config('request.jwt.claim.sub',member_id::text,true);
+  perform public.sync_quotes(source_generation,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),'[]'::jsonb,member_device,token);
+  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),member_device,token);
+  perform set_config('request.jwt.claim.sub',admin_id::text,true);
+  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),admin_device,token);
+  perform public.stage_envelope_quotes((retry->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{vault_generation}',to_jsonb('88888888-8888-4888-8888-888888888888'::text))));
+  response:=public.refresh_envelope_migration_source((retry->>'migration_id')::uuid,(select revision from public.vault_state where singleton),admin_device,token);
+  if response->>'reset'<>'false' or (select count(*) from public.vault_migration_quote_copies where migration_id=(retry->>'migration_id')::uuid and copy_kind='staged')<>1
+     or (select count(*) from public.vault_migration_queue_reports where migration_id=(retry->>'migration_id')::uuid)<>2 then raise exception 'same-revision refresh discarded resumable staging'; end if;
+  if public.stage_envelope_quotes((retry->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{vault_generation}',to_jsonb('88888888-8888-4888-8888-888888888888'::text)))) is null then raise exception 'same-revision refresh blocked staging resume'; end if;
   begin
     update public.vault_state set generation=gen_random_uuid() where singleton;
     perform public.activate_envelope_migration((retry->>'migration_id')::uuid,admin_device,token);
@@ -313,31 +403,56 @@ begin
     raise exception 'source revision drift activated a migration';
   exception when sqlstate '40001' then null;
   end;
+  begin
+    perform public.refresh_envelope_migration_source((retry->>'migration_id')::uuid,(select revision-1 from public.vault_state where singleton),admin_device,token);
+    raise exception 'refresh accepted stale current revision';
+  exception when sqlstate '40001' then null;
+  end;
+  response:=public.refresh_envelope_migration_source((retry->>'migration_id')::uuid,(select revision from public.vault_state where singleton),admin_device,token);
+  snapshot:=public.get_envelope_migration_coverage((retry->>'migration_id')::uuid,admin_device,token);
+  if response->>'status'<>'staging' or response->>'reset'<>'true' or snapshot->>'staged_quote_count'<>'0' or snapshot::text not like '%no_recent_empty_queue%'
+     or (select count(*) from public.vault_migration_quote_copies where migration_id=(retry->>'migration_id')::uuid and copy_kind='staged')<>0
+     or (select count(*) from public.vault_migration_queue_reports where migration_id=(retry->>'migration_id')::uuid)<>0
+     or (select source_state->>'envelope_status' from public.vault_migrations where id=(retry->>'migration_id')::uuid)<>'active'
+     or (select count(*) from public.vault_device_wrappers where generation='88888888-8888-4888-8888-888888888888')<>2
+     or (select count(*) from public.vault_recovery_wrappers where generation='88888888-8888-4888-8888-888888888888')<>2 then raise exception 'refresh did not reset only stale staging state'; end if;
   -- Reset the intentionally drifted retry fixture, then verify finalization and expiry cleanup.
   delete from public.vault_migration_quote_copies where migration_id=(retry->>'migration_id')::uuid;
   delete from public.vault_device_wrappers where generation='88888888-8888-4888-8888-888888888888';
   delete from public.vault_recovery_wrappers where generation='88888888-8888-4888-8888-888888888888';
   update public.vault_state set envelope_status='active',prepared_generation=null,active_migration_id=null where singleton;
   retry := public.prepare_envelope_migration(source_generation,(select revision from public.vault_state where singleton),admin_device,token,'77777777-7777-4777-8777-777777777777','{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
-  perform public.stage_envelope_quotes((retry->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{vault_generation}','"77777777-7777-4777-8777-777777777777"'::jsonb)));
   perform public.stage_envelope_wrappers((retry->>'migration_id')::uuid,admin_device,token,
     jsonb_build_array(jsonb_build_object('device_id',admin_device,'wrapped_key',repeat('A',512)),jsonb_build_object('device_id',member_device,'wrapped_key',repeat('A',512))),
     jsonb_build_array(jsonb_build_object('recovery_key_id',recovery_id,'wrapped_key',repeat('A',512)),jsonb_build_object('recovery_key_id',admin_recovery_id,'wrapped_key',repeat('A',512))));
-  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,admin_device,token);
+  perform public.sync_quotes(source_generation,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),'[]'::jsonb,admin_device,token);
   perform set_config('request.jwt.claim.sub',member_id::text,true);
-  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,member_device,token);
+  perform public.sync_quotes(source_generation,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),'[]'::jsonb,member_device,token);
+  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),member_device,token);
+  perform set_config('request.jwt.claim.sub',admin_id::text,true);
+  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),admin_device,token);
+  perform public.stage_envelope_quotes((retry->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{vault_generation}','"77777777-7777-4777-8777-777777777777"'::jsonb)));
+  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),admin_device,token);
+  perform set_config('request.jwt.claim.sub',member_id::text,true);
+  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),member_device,token);
   perform set_config('request.jwt.claim.sub',admin_id::text,true);
   perform public.activate_envelope_migration((retry->>'migration_id')::uuid,admin_device,token);
   perform public.finalize_envelope_migration((retry->>'migration_id')::uuid,admin_device,token);
   if exists(select 1 from public.vault_migration_quote_copies where migration_id=(retry->>'migration_id')::uuid) or (select envelope_status from public.vault_state where singleton)<>'active' then raise exception 'finalize did not release copies and state'; end if;
   retry := public.prepare_envelope_migration('77777777-7777-4777-8777-777777777777',(select revision from public.vault_state where singleton),admin_device,token,'66666666-6666-4666-8666-666666666666','{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
-  perform public.stage_envelope_quotes((retry->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{vault_generation}','"66666666-6666-4666-8666-666666666666"'::jsonb)));
   perform public.stage_envelope_wrappers((retry->>'migration_id')::uuid,admin_device,token,
     jsonb_build_array(jsonb_build_object('device_id',admin_device,'wrapped_key',repeat('A',512)),jsonb_build_object('device_id',member_device,'wrapped_key',repeat('A',512))),
     jsonb_build_array(jsonb_build_object('recovery_key_id',recovery_id,'wrapped_key',repeat('A',512)),jsonb_build_object('recovery_key_id',admin_recovery_id,'wrapped_key',repeat('A',512))));
-  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,admin_device,token);
+  perform public.sync_quotes('77777777-7777-4777-8777-777777777777',(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),'[]'::jsonb,admin_device,token);
   perform set_config('request.jwt.claim.sub',member_id::text,true);
-  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,member_device,token);
+  perform public.sync_quotes('77777777-7777-4777-8777-777777777777',(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),'[]'::jsonb,member_device,token);
+  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),member_device,token);
+  perform set_config('request.jwt.claim.sub',admin_id::text,true);
+  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),admin_device,token);
+  perform public.stage_envelope_quotes((retry->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{vault_generation}','"66666666-6666-4666-8666-666666666666"'::jsonb)));
+  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),admin_device,token);
+  perform set_config('request.jwt.claim.sub',member_id::text,true);
+  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),member_device,token);
   perform set_config('request.jwt.claim.sub',admin_id::text,true);
   perform public.activate_envelope_migration((retry->>'migration_id')::uuid,admin_device,token);
   update public.vault_migrations set rollback_expires_at=now() where id=(retry->>'migration_id')::uuid;
@@ -355,9 +470,13 @@ begin
   perform public.stage_envelope_wrappers((retry->>'migration_id')::uuid,admin_device,token,
     jsonb_build_array(jsonb_build_object('device_id',admin_device,'wrapped_key',repeat('A',512)),jsonb_build_object('device_id',member_device,'wrapped_key',repeat('A',512))),
     jsonb_build_array(jsonb_build_object('recovery_key_id',recovery_id,'wrapped_key',repeat('A',512)),jsonb_build_object('recovery_key_id',admin_recovery_id,'wrapped_key',repeat('A',512))));
-  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,admin_device,token);
+  perform public.sync_quotes((select generation from public.vault_state where singleton),(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),'[]'::jsonb,admin_device,token);
   perform set_config('request.jwt.claim.sub',member_id::text,true);
-  response:=public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,member_device,token);
+  perform public.sync_quotes((select generation from public.vault_state where singleton),(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),'[]'::jsonb,member_device,token);
+  perform set_config('request.jwt.claim.sub',admin_id::text,true);
+  perform public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),admin_device,token);
+  perform set_config('request.jwt.claim.sub',member_id::text,true);
+  response:=public.report_envelope_migration_empty_queue((retry->>'migration_id')::uuid,(select m.source_revision from public.vault_migrations m where m.id=(retry->>'migration_id')::uuid),member_device,token);
   perform set_config('request.jwt.claim.sub',admin_id::text,true);
   if response->>'status'<>'ready' or response->>'ready'<>'true' then raise exception 'empty migration did not become ready after reports'; end if;
   perform public.abandon_envelope_migration((retry->>'migration_id')::uuid,admin_device,token);
