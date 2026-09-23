@@ -9,6 +9,7 @@ export interface SyncContext {
     getDeviceAuthorization?: () => Promise<{ deviceId: string; token: string }>;
     renewLease?: (authorization: DeviceAuthorization) => Promise<void>;
     onGenerationMismatch?: () => void;
+    reportMigrationEmptyQueue?: (revision: number) => Promise<void>;
 }
 export interface DeviceAuthorization { deviceId: string; token: string }
 
@@ -212,8 +213,8 @@ async function rejectOversizedOperations(items: SyncQueueItem[]) {
     });
 }
 
-async function syncBatch(context: SyncContext, epoch: number, authorization: DeviceAuthorization | null): Promise<{ more: boolean; performed: boolean }> {
-    if (!navigator.onLine) return { more: false, performed: false };
+async function syncBatch(context: SyncContext, epoch: number, authorization: DeviceAuthorization | null): Promise<{ more: boolean; performed: boolean; revision: number }> {
+    if (!navigator.onLine) return { more: false, performed: false, revision: 0 };
     await adoptLegacyOperations(context);
     const revision = (await db.metadata.get(revisionKey(context.actorId, context.generation)))?.value ?? null;
     const queue = (await db.syncQueue.orderBy('created_at').toArray())
@@ -264,12 +265,12 @@ async function syncBatch(context: SyncContext, epoch: number, authorization: Dev
     }
     if (error) { const message = typeof (error as { message?: unknown }).message === 'string' ? (error as { message: string }).message : 'Unable to synchronize. Changes remain on this device.'; throw Object.assign(new Error(message), error, { status }); }
     if (data === null) throw Object.assign(new Error('Device authorization was denied. Unlock this device and retry synchronization.'), { code: '42501', status: 403 });
-    if (epoch !== syncEpoch) return { more: false, performed: true };
+    if (epoch !== syncEpoch) return { more: false, performed: true, revision: 0 };
     const sentIds = new Set(operations.map(operation => operation.operation_id));
     if (!validResponse(data, sentIds)) throw new Error('Invalid sync response.');
     if (data.generation !== context.generation) {
         await rejectStaleGeneration(context, epoch);
-        return { more: false, performed: true };
+        return { more: false, performed: true, revision: data.revision };
     }
     let rejectedDelete = false;
     await db.transaction('rw', db.quotes, db.syncQueue, db.metadata, async () => {
@@ -299,22 +300,25 @@ async function syncBatch(context: SyncContext, epoch: number, authorization: Dev
             await db.metadata.put({ id: revisionKey(context.actorId, context.generation), value: data.revision });
         }
     });
-    if (epoch !== syncEpoch) return { more: false, performed: true };
+    if (epoch !== syncEpoch) return { more: false, performed: true, revision: data.revision };
     const remaining = (await db.syncQueue.toArray()).some(item =>
         item.actor_id === context.actorId && item.vault_generation === context.generation && item.status !== 'rejected' && item.status !== 'blocked'
     );
-    return { more: remaining || (rejectedDelete && !data.quotes), performed: true };
+    return { more: remaining || (rejectedDelete && !data.quotes), performed: true, revision: data.revision };
 }
 
 async function sync(context: SyncContext, epoch: number) {
     let performed = false;
+    let revision = 0;
     if (!navigator.onLine) return performed;
     const authorization = context.getDeviceAuthorization ? await context.getDeviceAuthorization() : null;
     while (epoch === syncEpoch) {
         const request = syncRequest;
         const result = await syncBatch(context, epoch, authorization);
         performed ||= result.performed;
+        revision = result.revision;
         if (!result.more && request === syncRequest) {
+            if (performed && authorization && context.reportMigrationEmptyQueue) await context.reportMigrationEmptyQueue(revision);
             if (performed && authorization && context.renewLease) await context.renewLease(authorization);
             return performed;
         }

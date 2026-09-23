@@ -29,7 +29,9 @@ const activeIdentityKey = 'sync-active-identity';
 
 export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
     const { user, canSync, retry: retrySession } = useAuth();
-    const { encryptionKey, vaultGeneration, legacyVaultGeneration, lockVault, getDeviceAuthorization, renewDeviceLease, deviceId } = useCrypto();
+    const cryptoContext = useCrypto();
+    const { encryptionKey, vaultGeneration, legacyVaultGeneration, lockVault, getDeviceAuthorization, renewDeviceLease, deviceId } = cryptoContext;
+    const reportMigrationEmptyQueue = (cryptoContext as typeof cryptoContext & { reportMigrationEmptyQueue?: (revision: number) => Promise<void> }).reportMigrationEmptyQueue;
     const [initializedIdentity, setInitializedIdentity] = useState<string | null>(null);
     const [lastSync, setLastSync] = useState<{ identity: string; at: string } | null>(null);
     const [syncError, setSyncError] = useState('');
@@ -43,7 +45,8 @@ export const QuotesProvider = ({ children }: { children: React.ReactNode }) => {
         actorId, generation, legacyGeneration: legacyVaultGeneration, onGenerationMismatch: lockVault,
         getDeviceAuthorization: deviceId ? getDeviceAuthorization : undefined,
         renewLease: deviceId ? renewDeviceLease : undefined,
-    } : null, [actorId, generation, legacyVaultGeneration, lockVault, getDeviceAuthorization, renewDeviceLease, deviceId]);
+        reportMigrationEmptyQueue: deviceId ? reportMigrationEmptyQueue : undefined,
+    } : null, [actorId, generation, legacyVaultGeneration, lockVault, getDeviceAuthorization, renewDeviceLease, deviceId, reportMigrationEmptyQueue]);
     const identity = context && `${context.actorId}:${context.generation}`;
     const ready = initializedIdentity === identity;
     const loading = !ready;
