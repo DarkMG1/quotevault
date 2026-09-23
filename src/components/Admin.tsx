@@ -10,6 +10,7 @@ import { getErrorMessage, useModalDialog } from './ui';
 import { abandonEnvelopeMigration, createEncryptedMigrationExport, getEnvelopeMigrationCoverage, getPendingEnvelopeMigration, loadMigrationSourceSnapshot, prepareEnvelopeMigration, runEnvelopeMigration, activateEnvelopeMigration, rollbackEnvelopeMigration, type EnvelopeMigrationCoverage } from '../lib/vault-migration';
 import { deriveQuoteKey, generateVaultMasterKey } from '../lib/device-crypto';
 import { encryptData } from '../lib/crypto';
+import { LegacyReversion } from './LegacyReversion';
 
 export function ApprovalRequest({ requestId, fingerprint }: { requestId: string; fingerprint: string }) {
     const { approveDeviceRequest } = useCrypto();
@@ -70,6 +71,7 @@ export const AdminDashboard = () => {
         <form onSubmit={add} className="flex gap-2"><input aria-label="Email address to allow" type="email" required value={email} onChange={event => setEmail(event.target.value)} className="flex-1 rounded-xl bg-slate-900 border border-slate-700 p-3 text-white" /><button aria-label="Add email to allowlist" disabled={busy} className="rounded-xl bg-primary-600 px-5"><Plus /></button></form>
         <ul className="divide-y divide-slate-700">{allowlist.map(item => <li key={item.id} className="py-3 flex justify-between"><span>{item.email}</span><button aria-label={`Remove ${item.email} from allowlist`} disabled={busy || item.email.trim().toLowerCase() === ADMIN_EMAIL} onClick={() => setRemoveTarget(item)}><Trash2 className="w-4 h-4 text-red-400" /></button></li>)}</ul>
         <MigrationPanel />
+        <LegacyReversion />
         <dialog ref={removeDialog} role="dialog" aria-labelledby="remove-member-title" className="z-50 bg-slate-800 border border-slate-700 p-6 rounded-2xl shadow-xl max-w-lg w-[calc(100%-2rem)] text-white [&::backdrop]:bg-black/60 [&::backdrop]:backdrop-blur-sm">
             <h3 id="remove-member-title" className="text-lg font-semibold">Remove {removeTarget?.email}</h3>
             <p className="mt-2 text-sm text-slate-300">This revokes the member’s devices, recovery keys, and active account sessions. It cannot erase quote data they already copied.</p>
