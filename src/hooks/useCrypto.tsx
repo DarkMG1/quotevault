@@ -8,7 +8,7 @@ import { useAuth } from './useAuth';
 import { isAdminUser } from '../lib/access';
 import { VaultGate, vaultGateState } from '../components/VaultGate';
 import { RecoverySetup } from '../components/RecoverySetup';
-import { completeDevice, deleteDeviceState, formatEnrollmentCode, getDeviceRequest, loadDeviceState, needsRecoverySetup, recoverySetupRetryOutcome, revokeOwnDevice, saveDeviceState } from '../lib/device';
+import { approveDevice, completeDevice, deleteDeviceState, formatEnrollmentCode, getDeviceRequest, loadDeviceState, needsRecoverySetup, recoverySetupRetryOutcome, revokeOwnDevice, saveDeviceState } from '../lib/device';
 import { activateRecoveredDevice, beginRecovery, completeRecovery, createRecoveryKey, decryptDeviceBundle, getPasskeyRestoreDevices, prepareDeviceEnrollment, registerPasskey, renewDeviceLease, renewThenCompleteDevice, unlockPasskey, webauthnChallenge } from '../lib/device-security';
 import { decryptPrivateBundle, deriveQuoteKey, deriveRecoveryBundleKey, encryptPrivateBundle, fingerprintPublicJwk, generateAuthorizationToken, generateWrappingKeyPair, unwrapVaultKey, wrapVaultKey } from '../lib/device-crypto';
 import { arrayBufferToBase64 } from '../lib/crypto';
@@ -112,8 +112,8 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
     }, [canSync, deviceState, getDeviceAuthorization, lockVault, user]);
     const approveDeviceRequest = useCallback(async (requestId: string, fingerprint: string, code: string) => {
         const vault = stateRef.current, master = masterKey.current; if (!vault || isLegacyVaultState(vault) || !master) throw new Error('Unlock an approved device first.');
-        const { getDeviceRequest, approveDevice, formatEnrollmentCode } = await import('../lib/device'); const request = await getDeviceRequest(requestId); if (request.enrollmentFingerprint !== fingerprint || await formatEnrollmentCode(request.enrollmentFingerprint) !== code.trim().toUpperCase()) throw new Error('The verification code does not match this device request.');
-        const publicKey = await crypto.subtle.importKey('jwk', request.publicJwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt']); const { wrapVaultKey } = await import('../lib/device-crypto'); const wrappedKey = await wrapVaultKey({ version: 1, vaultId: 'quotevault', generation: vault.generation, targetFingerprint: request.publicKeyFingerprint, masterKey: master }, publicKey);
+        const request = await getDeviceRequest(requestId); if (request.enrollmentFingerprint !== fingerprint || await formatEnrollmentCode(request.enrollmentFingerprint) !== code.trim().toUpperCase()) throw new Error('The verification code does not match this device request.');
+        const publicKey = await crypto.subtle.importKey('jwk', request.publicJwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt']); const wrappedKey = await wrapVaultKey({ version: 1, vaultId: 'quotevault', generation: vault.generation, targetFingerprint: request.publicKeyFingerprint, masterKey: master }, publicKey);
         const auth = await getDeviceAuthorization();
         await approveDevice({ requestId, ownerId: request.ownerId, publicKeyFingerprint: request.publicKeyFingerprint, enrollmentFingerprint: request.enrollmentFingerprint, wrappedKey, generation: vault.generation, approverDeviceId: auth.deviceId, approverToken: auth.token });
     }, [getDeviceAuthorization]);

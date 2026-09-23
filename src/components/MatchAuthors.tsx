@@ -11,7 +11,7 @@ import type { Quote } from '../types';
 
 export function MatchAuthors({ onClose }: { onClose: () => void }) {
     const { user, canSync } = useAuth();
-    const { encryptionKey, vaultGeneration, getDeviceAuthorization } = useCrypto();
+    const { encryptionKey, vaultGeneration, deviceId, getDeviceAuthorization } = useCrypto();
     const { quotes, refresh, loading, initialFetchPending } = useQuotes();
     const [rows, setRows] = useState<{ quote: Quote; author: string }[]>([]);
     const [names, setNames] = useState<string[]>([]);
@@ -47,7 +47,7 @@ export function MatchAuthors({ onClose }: { onClose: () => void }) {
         const epoch = lifecycle.current;
         setBusy(true); setError('');
         try {
-            await saveAuthorMatches(changes.slice(0, 500), encryptionKey, () => lifecycle.current === epoch, getDeviceAuthorization);
+            await saveAuthorMatches(changes.slice(0, 500), encryptionKey, () => lifecycle.current === epoch, deviceId ? getDeviceAuthorization : undefined);
             if (lifecycle.current === epoch) { await refresh(); onClose(); }
         } catch (cause) { if (lifecycle.current === epoch) setError(getErrorMessage(cause, 'Could not save author corrections.')); }
         finally { if (lifecycle.current === epoch) setBusy(false); }

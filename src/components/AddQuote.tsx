@@ -24,7 +24,7 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
     const [saveError, setSaveError] = useState('');
     const { addQuote, refresh } = useQuotes();
     const { user, canSync } = useAuth();
-    const { encryptionKey, isLocked, vaultGeneration, getDeviceAuthorization } = useCrypto();
+    const { encryptionKey, isLocked, vaultGeneration, deviceId, getDeviceAuthorization } = useCrypto();
     const lifecycle = useRef(0);
     const [profiles, setProfiles] = useState<AuthorProfile[]>([]);
     const [isLoadingProfiles, setIsLoadingProfiles] = useState(false);
@@ -79,7 +79,7 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
                 if (!isAdminUser(user) || !canSync || vaultGeneration !== edit.stored.vault_generation) {
                     throw new Error('An online admin session is required to edit quotes.');
                 }
-                await saveQuoteEdit(edit.stored, { text, author, context, quoteDate }, encryptionKey, () => lifecycle.current === epoch, getDeviceAuthorization);
+                await saveQuoteEdit(edit.stored, { text, author, context, quoteDate }, encryptionKey, () => lifecycle.current === epoch, deviceId ? getDeviceAuthorization : undefined);
                 if (lifecycle.current === epoch) { await refresh(); onClose(); }
                 return;
             }

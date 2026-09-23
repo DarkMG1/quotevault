@@ -147,6 +147,16 @@ await (async () => {
 })();
 
 await (async () => {
+  const { sync, navigator } = setup();
+  let authorizations = 0;
+  navigator.onLine = false;
+  assert.equal(await sync.processSyncQueue({ actorId: 'u1', generation: 'g1', getDeviceAuthorization: async () => {
+    authorizations++; return { deviceId: '11111111-1111-4111-8111-111111111111', token: 'transient-token' };
+  } }), false);
+  assert.equal(authorizations, 0, 'offline sync never prompts for device authorization');
+})();
+
+await (async () => {
   const { sync } = setup();
   assert.equal(sync.isTransientSyncFailure({ status: 503 }), true, 'server failures retry');
   assert.equal(sync.isTransientSyncFailure({ message: 'Failed to fetch' }), true, 'network failures retry');

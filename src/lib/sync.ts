@@ -308,6 +308,7 @@ async function syncBatch(context: SyncContext, epoch: number, authorization: Dev
 
 async function sync(context: SyncContext, epoch: number) {
     let performed = false;
+    if (!navigator.onLine) return performed;
     const authorization = context.getDeviceAuthorization ? await context.getDeviceAuthorization() : null;
     while (epoch === syncEpoch) {
         const request = syncRequest;
