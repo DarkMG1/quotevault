@@ -52,6 +52,9 @@ psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922140000_a
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-audit-fixes.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-legacy-client.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f scripts/quote-fingerprint.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260923000000_legacy_reversion.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260923000000_legacy_reversion.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-legacy-reversion.sql
 # An older migration reapplied by mistake recreates device-less overloads; the latest migration closes them.
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260921000000_vault_hardening.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922140000_audit_fixes.sql
