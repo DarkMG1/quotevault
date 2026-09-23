@@ -841,6 +841,8 @@ Add `VITE_DEVICE_LEASE_PUBLIC_JWK=<public JSON>` to `.env`; run `node scripts/ch
 
 **Rollback:** if quotes were added/edited by the new frontend, run the Task 6 runbook (same passphrase is fine) before switching `current` back to `a1bb840`; otherwise switch immediately with the Task 6 step 7 command.
 
+**Task 10 deploy (2026-09-23):** `deploy.py` activated release `6afded7faeb4bc8a0a1f4dab9f7d5fb3655bf458` (`current` switched atomically; 11 releases, `a1bb840` retained; 3.1 GB free). Health check with `--revision` passed; served bundle `index-CNVoz8oR.js` pins the deployed lease public key (not the example key) and holds no private JWK field. Browser smoke test and production dry run pending operator.
+
 ### Task 11: Prepare and enroll (vault `preparing`)
 
 - [ ] **Step 1** — Admin: download encrypted backup, prepare migration (vault → `preparing`); members keep using the shared key.
