@@ -155,6 +155,30 @@ its empty-queue report asks for the previous group vault key once. The browser
 uses it only in memory to re-encrypt that queued work, then removes the cached
 public derivation metadata. The key and password are never stored or sent.
 
+### Rollback to the shared vault key
+
+The rollback works from `legacy` or `active` at any time. It never deletes a
+quote: the pre-reversion ciphertext is retained in
+`vault_legacy_reversion_rows` (`row_kind='source'`).
+
+1. From `preparing`, first click **Cancel preparation** (abandon). From
+   `maintenance`, use **rollback** (within 7 days) or finalize first.
+2. Ask every member to open the app online and confirm **Sync now** shows no
+   pending changes. Unsynced offline work is not uploaded by a reversion.
+3. Record `scripts/quote-fingerprint.sql` output (count and `id_digest`).
+4. On an unlocked administrator device: Admin → **Dry run (no changes)**.
+   Stop if it reports any quote ID.
+5. Enter a new shared passphrase (12+ characters), repeat it, type
+   `RETURN TO SHARED KEY`, and click **Return to shared vault key**.
+6. Rerun the fingerprint: `quote_count` and `id_digest` must equal step 3,
+   `envelope_status` must be `legacy`.
+7. Optional: restore the shared-key frontend atomically on the VPS:
+   ```sh
+   ssh vps 'cd /home/dark/quotevault && ln -sfn releases/a1bb8400bf2c6ad013f756ccb6ee7a70c8640eb1 current.next && mv -Tf current.next current'
+   python3 scripts/healthcheck.py --site https://quotes.darkmg1.dev --env-file .env
+   ```
+   Only after step 6: the old frontend cannot read v2 records.
+
 ## Static release
 
 The protected production root is `/home/dark/quotevault`, with immutable
