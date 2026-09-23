@@ -51,6 +51,11 @@ begin
   exception when sqlstate '40001' then null;
   end;
   begin
+    perform public.prepare_envelope_migration(gen_random_uuid(),source_revision,admin_device,token,target_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
+    raise exception 'prepare accepted source generation drift';
+  exception when sqlstate '40001' then null;
+  end;
+  begin
     perform public.prepare_envelope_migration(source_generation,source_revision,admin_device,token,source_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
     raise exception 'prepare accepted identical generations';
   exception when sqlstate '22023' then null;
@@ -133,6 +138,12 @@ begin
   perform public.stage_envelope_wrappers((retry->>'migration_id')::uuid,admin_device,token,
     jsonb_build_array(jsonb_build_object('device_id',admin_device,'wrapped_key',repeat('A',512)),jsonb_build_object('device_id',member_device,'wrapped_key',repeat('A',512))),
     jsonb_build_array(jsonb_build_object('recovery_key_id',recovery_id,'wrapped_key',repeat('A',512))));
+  begin
+    update public.vault_state set generation=gen_random_uuid() where singleton;
+    perform public.activate_envelope_migration((retry->>'migration_id')::uuid,admin_device,token);
+    raise exception 'source generation drift activated a migration';
+  exception when sqlstate '40001' then null;
+  end;
   update public.quotes set author=author where id=quote_id;
   begin
     perform public.activate_envelope_migration((retry->>'migration_id')::uuid,admin_device,token);
