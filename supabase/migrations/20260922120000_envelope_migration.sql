@@ -60,7 +60,7 @@ declare state public.vault_state%rowtype; authorized jsonb; migration public.vau
 begin
   if public.qv_is_admin() is not true or p_source_generation is null or p_source_revision is null or p_target_generation is null or p_target_generation=p_source_generation or public.qv_valid_verifier(p_target_verifier) is not true then raise exception 'Invalid migration request' using errcode='22023'; end if;
   select * into state from public.vault_state where singleton for update;
-  if state.envelope_status <> 'legacy' or state.active_migration_id is not null or state.generation is distinct from p_source_generation or state.revision is distinct from p_source_revision then raise exception 'Migration source changed; reload before staging' using errcode='40001'; end if;
+  if state.envelope_status not in ('legacy','active') or state.active_migration_id is not null or state.generation is distinct from p_source_generation or state.revision is distinct from p_source_revision then raise exception 'Migration source changed; reload before staging' using errcode='40001'; end if;
   authorized := public.qv_authorize_device(p_device_id,p_token,state.generation,'state');
   if authorized is null then raise exception 'Migration device is not authorized' using errcode='42501'; end if;
   insert into public.vault_migrations(source_generation,target_generation,target_verifier,source_revision,expected_quote_count,status,initiating_device_id,source_state)
@@ -195,15 +195,17 @@ end $finalize$;
 
 create or replace function public.purge_expired_vault_rollback()
 returns integer language plpgsql security definer set search_path = public, pg_temp as $purge$
-declare n integer:=0; state public.vault_state%rowtype; migration public.vault_migrations%rowtype;
+declare n integer:=0; state public.vault_state%rowtype; expired_id uuid;
 begin
   select * into state from public.vault_state where singleton for update;
-  for migration in select * from public.vault_migrations where status='activated' and rollback_expires_at<=now() order by id for update skip locked loop
-    delete from public.vault_migration_quote_copies where migration_id=migration.id;
-    update public.vault_migrations set status='finalized' where id=migration.id;
-    if state.active_migration_id=migration.id then update public.vault_state set envelope_status='active',prepared_generation=null,active_migration_id=null where singleton; end if;
+  for expired_id in select id from public.vault_migrations where status='activated' and rollback_expires_at<=now() order by id for update skip locked loop
+    delete from public.vault_migration_quote_copies c where c.migration_id=expired_id;
+    update public.vault_migrations set status='finalized' where id=expired_id;
+    if state.active_migration_id is not distinct from expired_id then update public.vault_state set envelope_status='active',prepared_generation=null,active_migration_id=null where singleton; end if;
     n:=n+1;
   end loop;
+  delete from public.vault_migration_quote_copies c using public.vault_migrations m where c.migration_id=m.id and m.status='finalized';
+  update public.vault_state set envelope_status='active',prepared_generation=null,active_migration_id=null where active_migration_id in (select id from public.vault_migrations where status='finalized');
   return n;
 end $purge$;
 

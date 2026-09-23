@@ -45,15 +45,44 @@ begin
   on conflict (id) do update set text=excluded.text, vault_generation=excluded.vault_generation;
   source_revision := (select revision from public.vault_state where singleton);
   perform set_config('request.jwt.claim.sub',admin_id::text,true);
+  begin
+    perform public.prepare_envelope_migration(source_generation,source_revision+1,admin_device,token,target_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
+    raise exception 'prepare accepted source revision drift';
+  exception when sqlstate '40001' then null;
+  end;
+  begin
+    perform public.prepare_envelope_migration(source_generation,source_revision,admin_device,token,source_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
+    raise exception 'prepare accepted identical generations';
+  exception when sqlstate '22023' then null;
+  end;
   migration := public.prepare_envelope_migration(source_generation,source_revision,admin_device,token,target_generation,'{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
   if migration is null or (select envelope_status from public.vault_state where singleton) <> 'preparing' then raise exception 'prepare did not preserve preparing'; end if;
   row := jsonb_build_object('id',quote_id,'text',cipher,'author','ENCRYPTED','context','ENCRYPTED','quote_date',current_date::text,'created_at','2026-09-22T12:34:56.000Z','user_id',admin_id,'vault_generation',target_generation);
+  begin
+    perform public.stage_envelope_quotes((migration->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{text}',to_jsonb('$$E2E$${"version":1,"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::text))));
+    raise exception 'malformed v2 target was staged';
+  exception when sqlstate '22023' then null;
+  end;
+  begin
+    perform public.activate_envelope_migration((migration->>'migration_id')::uuid,admin_device,token);
+    raise exception 'missing staged IDs activated';
+  exception when sqlstate '40001' then null;
+  end;
   staged := public.stage_envelope_quotes((migration->>'migration_id')::uuid,admin_device,token,jsonb_build_array(row));
   if staged->>'status' <> 'staging' then raise exception 'valid staged target was not staged'; end if;
   if public.stage_envelope_quotes((migration->>'migration_id')::uuid,admin_device,token,jsonb_build_array(row)) <> staged then raise exception 'identical staging replay changed'; end if;
   begin
     perform public.stage_envelope_quotes((migration->>'migration_id')::uuid,admin_device,token,jsonb_build_array(row || jsonb_build_object('text','$$E2E$${"version":2,"iv":"AAAAAAAAAAAAAAAA","data":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="}')));
     raise exception 'changed staging replay was accepted';
+  exception when sqlstate '40001' then null;
+  end;
+  begin
+    perform public.stage_envelope_quotes((migration->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{id}','"77777777-7777-4777-8777-777777777777"'::jsonb)));
+    perform public.stage_envelope_wrappers((migration->>'migration_id')::uuid,admin_device,token,
+      jsonb_build_array(jsonb_build_object('device_id',admin_device,'wrapped_key',repeat('A',512)),jsonb_build_object('device_id',member_device,'wrapped_key',repeat('A',512))),
+      jsonb_build_array(jsonb_build_object('recovery_key_id',recovery_id,'wrapped_key',repeat('A',512))));
+    perform public.activate_envelope_migration((migration->>'migration_id')::uuid,admin_device,token);
+    raise exception 'extra staged ID activated';
   exception when sqlstate '40001' then null;
   end;
   perform public.stage_envelope_wrappers((migration->>'migration_id')::uuid,admin_device,token,
@@ -100,7 +129,56 @@ begin
      or (select prepared_generation is null and active_migration_id is null from public.vault_state where singleton) is not true then raise exception 'rollback did not exactly restore source'; end if;
   retry := public.prepare_envelope_migration(source_generation,source_revision,admin_device,token,'88888888-8888-4888-8888-888888888888','{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
   if retry is null then raise exception 'rollback prevented future migration'; end if;
+  perform public.stage_envelope_quotes((retry->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{vault_generation}',to_jsonb('88888888-8888-4888-8888-888888888888'::text))));
+  perform public.stage_envelope_wrappers((retry->>'migration_id')::uuid,admin_device,token,
+    jsonb_build_array(jsonb_build_object('device_id',admin_device,'wrapped_key',repeat('A',512)),jsonb_build_object('device_id',member_device,'wrapped_key',repeat('A',512))),
+    jsonb_build_array(jsonb_build_object('recovery_key_id',recovery_id,'wrapped_key',repeat('A',512))));
+  update public.quotes set author=author where id=quote_id;
+  begin
+    perform public.activate_envelope_migration((retry->>'migration_id')::uuid,admin_device,token);
+    raise exception 'source revision drift activated a migration';
+  exception when sqlstate '40001' then null;
+  end;
+  -- Reset the intentionally drifted retry fixture, then verify finalization and expiry cleanup.
+  delete from public.vault_migration_quote_copies where migration_id=(retry->>'migration_id')::uuid;
+  delete from public.vault_device_wrappers where generation='88888888-8888-4888-8888-888888888888';
+  delete from public.vault_recovery_wrappers where generation='88888888-8888-4888-8888-888888888888';
+  update public.vault_state set envelope_status='legacy',prepared_generation=null,active_migration_id=null where singleton;
+  retry := public.prepare_envelope_migration(source_generation,(select revision from public.vault_state where singleton),admin_device,token,'77777777-7777-4777-8777-777777777777','{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
+  perform public.stage_envelope_quotes((retry->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{vault_generation}','"77777777-7777-4777-8777-777777777777"'::jsonb)));
+  perform public.stage_envelope_wrappers((retry->>'migration_id')::uuid,admin_device,token,
+    jsonb_build_array(jsonb_build_object('device_id',admin_device,'wrapped_key',repeat('A',512)),jsonb_build_object('device_id',member_device,'wrapped_key',repeat('A',512))),
+    jsonb_build_array(jsonb_build_object('recovery_key_id',recovery_id,'wrapped_key',repeat('A',512))));
+  perform public.activate_envelope_migration((retry->>'migration_id')::uuid,admin_device,token);
+  perform public.finalize_envelope_migration((retry->>'migration_id')::uuid,admin_device,token);
+  if exists(select 1 from public.vault_migration_quote_copies where migration_id=(retry->>'migration_id')::uuid) or (select envelope_status from public.vault_state where singleton)<>'active' then raise exception 'finalize did not release copies and state'; end if;
+  retry := public.prepare_envelope_migration('77777777-7777-4777-8777-777777777777',(select revision from public.vault_state where singleton),admin_device,token,'66666666-6666-4666-8666-666666666666','{"iv":"AAAAAAAAAAAAAAAA","data":"AAAAAAAAAAAAAAAAAAAAAA=="}'::jsonb);
+  perform public.stage_envelope_quotes((retry->>'migration_id')::uuid,admin_device,token,jsonb_build_array(jsonb_set(row,'{vault_generation}','"66666666-6666-4666-8666-666666666666"'::jsonb)));
+  perform public.stage_envelope_wrappers((retry->>'migration_id')::uuid,admin_device,token,
+    jsonb_build_array(jsonb_build_object('device_id',admin_device,'wrapped_key',repeat('A',512)),jsonb_build_object('device_id',member_device,'wrapped_key',repeat('A',512))),
+    jsonb_build_array(jsonb_build_object('recovery_key_id',recovery_id,'wrapped_key',repeat('A',512))));
+  perform public.activate_envelope_migration((retry->>'migration_id')::uuid,admin_device,token);
+  update public.vault_migrations set rollback_expires_at=now() where id=(retry->>'migration_id')::uuid;
+  begin
+    perform public.rollback_envelope_migration((retry->>'migration_id')::uuid,admin_device,token);
+    raise exception 'rollback succeeded at expiry';
+  exception when sqlstate '40001' then null;
+  end;
+  if public.purge_expired_vault_rollback()<>1 then raise exception 'expired purge did not select migration'; end if;
+  response := jsonb_build_object('copies',(select count(*) from public.vault_migration_quote_copies where migration_id=(retry->>'migration_id')::uuid),'status',(select envelope_status from public.vault_state where singleton));
+  if response->>'copies'<>'0' or response->>'status'<>'active' then raise exception 'expired purge did not release copies and state: %',response; end if;
   if has_table_privilege('authenticated','public.vault_migration_quote_copies','select') then raise exception 'migration copies were directly readable'; end if;
 end $test$;
+
+set local role authenticated;
+do $direct$
+begin
+  begin
+    perform 1 from public.vault_migration_quote_copies;
+    raise exception 'authenticated role read migration ciphertext copies';
+  exception when insufficient_privilege then null;
+  end;
+end $direct$;
+reset role;
 
 rollback;
