@@ -68,6 +68,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
             const previous = stateRef.current; const enteringPreparing = previous?.envelope_status !== 'preparing' && next.envelope_status === 'preparing' && previous?.generation === next.generation;
             if (previous && (previous.generation !== next.generation || previous.prepared_generation !== next.prepared_generation && !enteringPreparing)) clearKeys(); stateRef.current = next; setState(next);
             if (next.envelope_status === 'preparing' || !isLegacyVaultState(next)) { const local = await loadDeviceState(userId); setDeviceState(local); setRecoveryRequired(needsRecoverySetup(local)); setLeaseExpired(!!local?.lease && local.lease.claims[5] <= Date.now()); setPendingRequest(null); if (local && !local.wrapper && !local.preparedWrapper && canSync && navigator.onLine) { try { const pending = await getDeviceRequest(local.deviceId); setPendingRequest({ requestId: pending.requestId, fingerprint: pending.enrollmentFingerprint, code: await formatEnrollmentCode(pending.enrollmentFingerprint) }); } catch { setPendingRequest(null); } } }
+            else if (next.envelope_status === 'legacy') { setDeviceState(null); setPendingRequest(null); }
         } catch (cause) { if (request.current === version) { clearKeys(); stateRef.current = null; setState(null); setError(cause instanceof Error ? cause.message : 'Could not load vault settings.'); } }
         finally { if (request.current === version) setBusy(false); }
     }, [canSync, clearKeys, userId]);

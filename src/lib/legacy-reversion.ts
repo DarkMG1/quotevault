@@ -27,7 +27,9 @@ export async function revertToLegacy(input: LegacyReversionInput): Promise<Legac
         let fields: Record<string, unknown>;
         try { fields = { ...await decryptQuoteRecord(quote, input.sourceKey) }; } catch { throw new Error(`Quote ${quote.id} could not be decrypted. Nothing was changed.`); }
         for (const name of VISIBLE) delete fields[name];
-        if (typeof fields.text !== 'string' || typeof fields.author !== 'string') throw new Error(`Quote ${quote.id} has no text or author for the shared-key client. Nothing was changed.`);
+        if (typeof fields.text !== 'string' || typeof fields.author !== 'string' ||
+            fields.context !== undefined && typeof fields.context !== 'string' ||
+            fields.source_sender !== undefined && typeof fields.source_sender !== 'string') throw new Error(`Quote ${quote.id} has no text or author for the shared-key client. Nothing was changed.`);
         const text = await encryptLegacyQuoteText(fields, config.key);
         if (await decryptData(JSON.parse(text.slice(QUOTE_CIPHERTEXT_SENTINEL.length)), config.key) !== JSON.stringify(fields)) throw new Error(`Quote ${quote.id} failed verification. Nothing was changed.`);
         rows.push({ quote_id: quote.id, text });

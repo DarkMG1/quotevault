@@ -4,14 +4,15 @@ import { loadModule } from '../load-module.mjs';
 
 const accountId = '22222222-2222-4222-8222-222222222222';
 const generation = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const ADMIN_EMAIL = 'darkmgdevelopment@gmail.com';
 const globals = { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob, Uint8Array };
 const legacy = loadModule('src/lib/crypto.ts', {}, globals);
 const crypt = loadModule('src/lib/device-crypto.ts', { './crypto': legacy }, globals);
 const quotes = loadModule('src/lib/quote-crypto.ts', { './crypto': legacy, './device-crypto': crypt }, globals);
 
-async function signIn(page: Page) {
+async function signIn(page: Page, email = 'browser-test@example.com') {
   await page.goto('/');
-  await page.locator('input[type=email]').fill('browser-test@example.com');
+  await page.locator('input[type=email]').fill(email);
   await page.locator('input[type=password]').fill('local-test-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
 }
@@ -44,7 +45,7 @@ test('a new device shows its approval code and can check approval after reload',
   await expect(page.getByRole('button', { name: 'Check approval', exact: true })).toBeVisible();
 });
 
-async function rememberedDevice(page: Page, recoverySetupRequired = false) {
+async function rememberedDevice(page: Page, recoverySetupRequired = false, email = 'browser-test@example.com') {
   const deviceId = webcrypto.randomUUID();
   const pair = await crypt.generateWrappingKeyPair();
   const publicJwk = await webcrypto.subtle.exportKey('jwk', pair.publicKey);
@@ -72,7 +73,7 @@ async function rememberedDevice(page: Page, recoverySetupRequired = false) {
     const body = route.request().postDataJSON();
     return route.fulfill({ json: { recovery_key_id: body.p_recovery_key_id, generation } });
   });
-  await signIn(page);
+  await signIn(page, email);
   await expect(page.getByRole('button', { name: 'Unlock remembered device' })).toBeVisible();
   await page.evaluate(async ({ state, rawKey }) => {
     const rememberedKey = await crypto.subtle.importKey('raw', new Uint8Array(rawKey), 'AES-GCM', false, ['encrypt', 'decrypt']);
@@ -165,4 +166,42 @@ test('the devices screen authenticates with this device when revoking another ow
   await expect(target).toContainText('revoked');
   await expect(target.getByRole('button', { name: 'Revoke', exact: true })).toHaveCount(0);
   expect(revoked).toBe(true);
+});
+
+test('a reverted vault forgets the admin device instead of leaving it approved', async ({ page }) => {
+  const { state } = await rememberedDevice(page, false, ADMIN_EMAIL);
+  const targetGeneration = '88888888-8888-4888-8888-888888888888';
+  let commitBody: Record<string, unknown> | undefined;
+  let reverted = false;
+  await page.route('**/rest/v1/rpc/list_members', route => route.fulfill({ json: [] }));
+  await page.route('**/rest/v1/rpc/get_pending_envelope_migration', route => route.fulfill({ json: null }));
+  await page.route('**/rest/v1/rpc/begin_legacy_reversion', route => route.fulfill({ json: {
+    reversion_id: '77777777-7777-4777-8777-777777777777', target_generation: targetGeneration, expected_quote_count: 1 } }));
+  await page.route('**/rest/v1/rpc/stage_legacy_reversion', route => route.fulfill({ json: {
+    reversion_id: '77777777-7777-4777-8777-777777777777', staged_quote_count: 1 } }));
+  await page.route('**/rest/v1/rpc/commit_legacy_reversion', route => {
+    commitBody = route.request().postDataJSON();
+    reverted = true;
+    return route.fulfill({ json: { generation: targetGeneration, revision: 2, envelope_status: 'legacy', quote_count: 1 } });
+  });
+  await page.route('**/rest/v1/rpc/get_vault_bootstrap_state', route => reverted
+    ? route.fulfill({ json: { envelope_status: 'legacy', generation: targetGeneration, prepared_generation: null,
+        legacy_generation: targetGeneration, kdf: commitBody!.p_kdf, verifier: commitBody!.p_verifier } })
+    : route.fulfill({ json: { envelope_status: 'active', generation, prepared_generation: null } }));
+  await page.getByRole('button', { name: 'Unlock remembered device' }).click();
+  await page.getByRole('link', { name: 'Open admin dashboard' }).click();
+  await page.getByLabel('New shared passphrase').fill('a new shared passphrase');
+  await page.getByLabel('Repeat passphrase').fill('a new shared passphrase');
+  await page.getByLabel('Type RETURN TO SHARED KEY').fill('RETURN TO SHARED KEY');
+  await page.getByRole('button', { name: 'Return to shared vault key', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Vault locked' })).toBeVisible();
+  await page.locator('#vault-key').fill('a new shared passphrase');
+  await page.getByRole('button', { name: 'Unlock Vault' }).click();
+  await page.route('**/rest/v1/rpc/list_own_devices', route => route.fulfill({ json: [{
+    id: state.deviceId, label: 'Current synthetic device', status: 'active', protection_mode: 'remembered',
+    created_at: new Date().toISOString(), last_sync_at: null, lease_expires_at: null, revoked_at: null }] }));
+  await page.getByRole('link', { name: 'Open profile' }).click();
+  const target = page.getByRole('listitem').filter({ hasText: 'Current synthetic device' });
+  await expect(target).toBeVisible();
+  await expect(target).not.toContainText('(this device)');
 });

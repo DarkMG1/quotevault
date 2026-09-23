@@ -100,5 +100,15 @@ test('dry run refuses a quote the shared-key client cannot display', async () =>
   const visible = { id, quote_date: '2026-09-22', created_at: '2026-09-22T12:00:00.000Z', user_id: USER, vault_generation: GEN, author: 'ENCRYPTED', context: 'ENCRYPTED' };
   const quote = await quoteCrypto.encryptQuoteRecord({ text: 'only text' }, visible, key);
   const runner = load((name) => { if (name === 'sync_quotes') return ok({ generation: GEN, revision: 9, results: [], quotes: [quote] }); throw new Error(`unexpected ${name}`); });
-  await assert.rejects(runner.revertToLegacy({ sourceGeneration: GEN, sourceKey: key, passphrase: 'a long enough passphrase', deviceId: null, token: null, dryRun: true }), /00000001-1111-4111-8111-111111111111/);
+  await assert.rejects(runner.revertToLegacy({ sourceGeneration: GEN, sourceKey: key, passphrase: 'a long enough passphrase', deviceId: null, token: null, dryRun: true }), /00000001-1111-4111-8111-111111111111 has no text or author/);
+});
+
+test('dry run refuses a quote whose context is not a string', async () => {
+  const master = deviceCrypto.generateVaultMasterKey();
+  const key = await deviceCrypto.deriveQuoteKey(master, GEN);
+  const id = '00000002-1111-4111-8111-111111111111';
+  const visible = { id, quote_date: '2026-09-22', created_at: '2026-09-22T12:00:00.000Z', user_id: USER, vault_generation: GEN, author: 'ENCRYPTED', context: 'ENCRYPTED' };
+  const quote = await quoteCrypto.encryptQuoteRecord({ text: 'has a bad context', author: 'Ada', context: 42 }, visible, key);
+  const runner = load((name) => { if (name === 'sync_quotes') return ok({ generation: GEN, revision: 9, results: [], quotes: [quote] }); throw new Error(`unexpected ${name}`); });
+  await assert.rejects(runner.revertToLegacy({ sourceGeneration: GEN, sourceKey: key, passphrase: 'a long enough passphrase', deviceId: null, token: null, dryRun: true }), /00000002-1111-4111-8111-111111111111 has no text or author/);
 });

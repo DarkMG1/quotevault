@@ -172,12 +172,20 @@ quote: the pre-reversion ciphertext is retained in
    `RETURN TO SHARED KEY`, and click **Return to shared vault key**.
 6. Rerun the fingerprint: `quote_count` and `id_digest` must equal step 3,
    `envelope_status` must be `legacy`.
-7. Optional: restore the shared-key frontend atomically on the VPS:
+7. Optional: restore the shared-key frontend. Switch it immediately after
+   step 6, before anyone is given the new passphrase — while `current` is
+   still the new frontend, it keeps writing v2 quotes in `legacy` mode,
+   which release a1bb840 shows as "Decryption Failed". If the switch is
+   wanted later and any time has passed since the reversion, rerun steps
+   3-6 first (the reversion works from `legacy` too, and the same
+   passphrase may be reused), then switch immediately:
    ```sh
    ssh vps 'cd /home/dark/quotevault && ln -sfn releases/a1bb8400bf2c6ad013f756ccb6ee7a70c8640eb1 current.next && mv -Tf current.next current'
    python3 scripts/healthcheck.py --site https://quotes.darkmg1.dev --env-file .env
    ```
-   Only after step 6: the old frontend cannot read v2 records.
+   Rerun the fingerprint again: `v2_count` must be `0`. Only once the
+   frontend decision above is complete does the operator give every
+   member the new shared passphrase, out of band.
 
 ## Static release
 
