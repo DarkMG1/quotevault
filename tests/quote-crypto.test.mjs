@@ -67,3 +67,17 @@ test('reads legacy sentinel ciphertext during migration', async () => {
     ...visible, text: 'Legacy', author: 'Ada', context: 'Old',
   });
 });
+
+test('legacy v1 text decrypts through the a1bb840 display path and the current reader', async () => {
+  const key = await cryptoApi.deriveEncryptionKey('legacy-reversion-test-key');
+  const fields = { text: 'first line\nsecond line', author: 'Ada & Grace', context: 'A context', source_sender: 'Original sender', import_source_id: '1'.padStart(64, '0') };
+  const text = await quoteCrypto.encryptLegacyQuoteText(fields, key);
+  assert.ok(text.startsWith('$$E2E$$'));
+  const bundle = JSON.parse(text.slice('$$E2E$$'.length));
+  assert.equal(Object.hasOwn(bundle, 'version'), false, 'a1bb840 treats any bundle as v1');
+  // a1bb840 src/components/ui.ts decryptQuoteForDisplay: decryptData(bundle, key) then isDecryptedPayload.
+  const legacy = JSON.parse(await cryptoApi.decryptData(bundle, key));
+  assert.equal(JSON.stringify(legacy), JSON.stringify(fields));
+  const current = await quoteCrypto.decryptQuoteRecord({ id: '11111111-1111-4111-8111-111111111111', text, user_id: '22222222-2222-4222-8222-222222222222', vault_generation: '33333333-3333-4333-8333-333333333333', created_at: '2026-09-23T00:00:00.000Z', quote_date: null }, key);
+  for (const [name, value] of Object.entries(fields)) assert.equal(current[name], value);
+});

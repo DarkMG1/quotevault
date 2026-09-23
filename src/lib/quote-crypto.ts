@@ -1,4 +1,4 @@
-import { decryptData } from './crypto';
+import { decryptData, encryptData } from './crypto';
 import { decryptEnvelope, encryptEnvelope } from './device-crypto';
 import type { Quote } from '../types';
 
@@ -95,4 +95,9 @@ export async function decryptQuoteRecord(storedQuote: object, key: CryptoKey): P
         quote_date: (stored as QuoteFields).quote_date ?? null,
     } : {};
     return { ...(payload as QuoteFields), ...visible };
+}
+
+/** Pre-envelope v1 text (no authenticated metadata): readable by the shared-key release a1bb840. */
+export async function encryptLegacyQuoteText(privateFields: QuoteFields, key: CryptoKey): Promise<string> {
+    return `${QUOTE_CIPHERTEXT_SENTINEL}${JSON.stringify(await encryptData(JSON.stringify(privateFields), key))}`;
 }
