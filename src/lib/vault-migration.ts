@@ -97,7 +97,7 @@ async function wrapTargets(masterKey: Uint8Array, generation: string, targetKey:
 }
 
 export async function getEnvelopeMigrationStatus(deviceId: string | null, token: string | null): Promise<Record<string, unknown> | null> {
-    const data = await nullableRpc('get_pending_envelope_migration', { p_device_id: deviceId === null ? null : validUuid(deviceId, 'device ID'), p_device_token: token });
+    const data = await nullableRpc('get_pending_envelope_migration', { p_device_id: deviceId === null ? null : validUuid(deviceId, 'device ID'), p_token: token });
     return data === null ? null : objectResponse(data, 'migration status');
 }
 export async function getPendingEnvelopeMigration(deviceId: string | null, token: string | null): Promise<PendingEnvelopeMigration> {
@@ -110,7 +110,7 @@ export async function getPendingEnvelopeMigration(deviceId: string | null, token
     return { migrationId, status, sourceGeneration: uuidOrNull(data.source_generation, 'source generation'), targetGeneration: uuidOrNull(data.target_generation, 'target generation'), sourceRevision: integerOrNull(data.source_revision, 'source revision'), expectedQuoteCount: integerOrNull(data.expected_quote_count, 'expected quote count'), stagedQuoteCount: integerOrNull(data.staged_quote_count, 'staged quote count') };
 }
 export async function abandonEnvelopeMigration(migrationId: string, deviceId: string | null, token: string | null): Promise<void> {
-    await rpc('abandon_envelope_migration', { p_migration_id: validUuid(migrationId, 'ID'), p_device_id: deviceId === null ? null : validUuid(deviceId, 'device ID'), p_device_token: token });
+    await rpc('abandon_envelope_migration', { p_migration_id: validUuid(migrationId, 'ID'), p_device_id: deviceId === null ? null : validUuid(deviceId, 'device ID'), p_token: token });
 }
 export async function rollbackEnvelopeMigration(migrationId: string, deviceId: string, token: string): Promise<void> {
     await rpc('rollback_envelope_migration', { p_migration_id: validUuid(migrationId, 'ID'), p_device_id: validUuid(deviceId, 'device ID'), p_token: token });
@@ -121,7 +121,7 @@ export interface EnvelopeMigrationCoverage {
     members: Array<{ memberId: string | null; email: string | null; devices: Array<{ deviceId: string; publicJwk: JsonWebKey; publicKeyFingerprint: string; attestation: unknown; wrapperStaged: boolean; emptyQueueReportedAt: string | null }>; recoveryKeys: Array<{ recoveryKeyId: string; publicJwk: JsonWebKey; publicKeyFingerprint: string; attestation: unknown; wrapperStaged: boolean }>; blockers: string[] }>;
 }
 export async function getEnvelopeMigrationCoverage(migrationId: string, deviceId: string, token: string): Promise<EnvelopeMigrationCoverage> {
-    const data = objectResponse(await rpc('get_envelope_migration_coverage', { p_migration_id: validUuid(migrationId, 'ID'), p_device_id: validUuid(deviceId, 'device ID'), p_device_token: token }), 'migration coverage');
+    const data = objectResponse(await rpc('get_envelope_migration_coverage', { p_migration_id: validUuid(migrationId, 'ID'), p_device_id: validUuid(deviceId, 'device ID'), p_token: token }), 'migration coverage');
     const migration = migrationResponse(data, migrationId); const integer = (value: unknown, label: string) => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : (() => { throw new Error(`Invalid migration ${label}.`); })();
     const members = Array.isArray(data.members) ? data.members.map(member => { const item = objectResponse(member, 'migration member');
         const devices = Array.isArray(item.devices) ? item.devices.map(device => { const value = objectResponse(device, 'migration device'); return { deviceId: validUuid(stringResponse(value.device_id, 'device ID'), 'device ID'), publicJwk: objectResponse(value.public_jwk, 'device public key') as JsonWebKey, publicKeyFingerprint: stringResponse(value.public_key_fingerprint, 'device fingerprint'), attestation: value.attestation, wrapperStaged: value.wrapper_staged === true, emptyQueueReportedAt: value.empty_queue_reported_at === null ? null : normalizeMigrationTimestamp(value.empty_queue_reported_at) }; }) : [];
