@@ -58,7 +58,13 @@ export async function renewThenCompleteDevice(input: { accountId: string; device
 }
 
 type PrfCredential = { rawId: ArrayBuffer; getClientExtensionResults(): { prf?: { enabled?: boolean; results?: { first?: ArrayBuffer } } } };
-const passkeyError = (error: unknown): never => { if ((error as { name?: unknown })?.name === 'NotAllowedError') throw new Error('Passkey request was cancelled. Use another device, recovery, or an administrator.'); throw new Error('Passkey is unavailable. Use another device, recovery, or an administrator.'); };
+const passkeyError = (error: unknown): never => {
+    const name = (error as { name?: unknown })?.name;
+    if (name === 'NotAllowedError') throw new Error('Passkey request was cancelled. Use another device, recovery, or an administrator.');
+    // Our own failures (e.g. the challenge request) already carry a precise message.
+    if (error instanceof Error && !(typeof DOMException !== 'undefined' && error instanceof DOMException)) throw error;
+    throw new Error(`Passkey is unavailable${typeof name === 'string' ? ` (${name})` : ''}. Use another device, recovery, or an administrator.`);
+};
 export async function unlockPasskey(input: PasskeyProtection, serverChallenge?: string): Promise<CryptoKey> {
     const checked = protection(input) as unknown as PasskeyProtection; const credentialId = b64urlBytes(checked.credentialId, 1, 1023); const salt = b64urlBytes(checked.prfSalt, 32); let challenge: Uint8Array | undefined;
     try { challenge = serverChallenge === undefined ? crypto.getRandomValues(new Uint8Array(32)) : b64urlBytes(serverChallenge, 32); const credentials = (typeof navigator === 'undefined' ? undefined : navigator.credentials) as CredentialsContainer | undefined; if (!credentials) fail('Passkey is unavailable. Use another device, recovery, or an administrator.'); const credential = await (credentials as CredentialsContainer).get({ publicKey: { challenge, rpId: checked.rpId, allowCredentials: [{ type: 'public-key', id: credentialId }], userVerification: 'required', extensions: { prf: { eval: { first: salt } } } } } as CredentialRequestOptions) as unknown as PrfCredential | null; const result = credential?.getClientExtensionResults().prf?.results?.first; if (!result || result.byteLength !== 32) fail('Passkey does not support PRF. Use another device, recovery, or an administrator.'); const prf = new Uint8Array(result as ArrayBuffer); try { const material = await crypto.subtle.importKey('raw', prf, 'HKDF', false, ['deriveKey']); return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(), info: new TextEncoder().encode('quotevault/passkey-bundle/v1') }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']); } finally { prf.fill(0); } } catch (error) { if (error instanceof Error && error.message.startsWith('Passkey')) throw error; return passkeyError(error); } finally { credentialId.fill(0); salt.fill(0); challenge?.fill(0); }
