@@ -126,7 +126,8 @@ export const serve = async (request: Request): Promise<Response> => {
   try { body = await request.json(); } catch { return reply(400, { error: 'invalid_request' }); }
   if (typeof body.action !== 'string') return reply(400, { error: 'invalid_request' });
   const userClient = createClient(url, anonKey, { global: { headers: { authorization } } });
-  const { data: userData, error: userError } = await userClient.auth.getUser();
+  // A client without the forwarded header: the header-carrying client would send its own key to Auth as well.
+  const { data: userData, error: userError } = await createClient(url, anonKey).auth.getUser(authorization.replace(/^Bearer\s+/, ''));
   if (userError || !userData.user) return reply(401, { error: 'unauthorized' });
   if (body.action === 'renew') {
     if (typeof body.deviceId !== 'string' || typeof body.token !== 'string') return reply(400, { error: 'invalid_request' });

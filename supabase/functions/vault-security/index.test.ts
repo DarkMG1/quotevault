@@ -63,3 +63,28 @@ Deno.test('CORS preflight allows every header supabase-js sends', async () => {
   const allowed = (response.headers.get('access-control-allow-headers') ?? '').split(',').map(value => value.trim().toLowerCase());
   for (const header of ['apikey', 'authorization', 'content-type', 'x-client-info']) if (!allowed.includes(header)) throw new Error(`preflight rejects ${header}`);
 });
+
+Deno.test('the session check authenticates the caller, not the project key', async () => {
+  const seen: string[] = [];
+  const server = Deno.serve({ hostname: '127.0.0.1', port: 0, onListen() {} }, request => {
+    const path = new URL(request.url).pathname;
+    seen.push(`${path} ${request.headers.get('authorization')}`);
+    if (path === '/auth/v1/user') return Response.json({ id: '22222222-2222-4222-8222-222222222222', aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' });
+    return Response.json({ generation: 'g' });
+  });
+  const previous = { url: Deno.env.get('SUPABASE_URL'), anon: Deno.env.get('SUPABASE_ANON_KEY') };
+  Deno.env.set('SUPABASE_URL', `http://127.0.0.1:${server.addr.port}`);
+  Deno.env.set('SUPABASE_ANON_KEY', 'project-anon-key');
+  try {
+    const { serve } = await import('./index.ts');
+    const response = await serve(new Request('https://edge.invalid/vault-security', { method: 'POST', headers: { authorization: 'Bearer caller.session.jwt', 'content-type': 'application/json' }, body: JSON.stringify({ action: 'webauthn_challenge', purpose: 'registration' }) }));
+    await response.body?.cancel();
+    const auth = seen.find(entry => entry.startsWith('/auth/v1/user '));
+    if (auth !== '/auth/v1/user Bearer caller.session.jwt') throw new Error(`session check sent ${auth}`);
+    if (response.status !== 200) throw new Error(`authenticated challenge request returned ${response.status}`);
+  } finally {
+    if (previous.url === undefined) Deno.env.delete('SUPABASE_URL'); else Deno.env.set('SUPABASE_URL', previous.url);
+    if (previous.anon === undefined) Deno.env.delete('SUPABASE_ANON_KEY'); else Deno.env.set('SUPABASE_ANON_KEY', previous.anon);
+    await server.shutdown();
+  }
+});
