@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { lazy, Suspense, useState } from 'react';
 import { LogOut, PlusCircle, Quote, ShieldAlert, UserCircle } from 'lucide-react';
 import { isAdminUser } from '../lib/access';
-import { AddQuote } from './AddQuote';
 import { useAuth } from '../hooks/useAuth';
 import { getErrorMessage } from './ui';
+
+const AddQuote = lazy(() => import('./AddQuote').then(m => ({ default: m.AddQuote })));
 
 export const Layout = ({ children, currentPath = '' }: { children: React.ReactNode, currentPath?: string }) => {
     const [isAddOpen, setIsAddOpen] = useState(false);
@@ -79,7 +80,7 @@ export const Layout = ({ children, currentPath = '' }: { children: React.ReactNo
                 <PlusCircle aria-hidden="true" className="w-6 h-6" />
             </button>
 
-            {isAddOpen && <AddQuote onClose={() => setIsAddOpen(false)} />}
+            {isAddOpen && <Suspense fallback={null}><AddQuote onClose={() => setIsAddOpen(false)} /></Suspense>}
         </div>
     );
 };
