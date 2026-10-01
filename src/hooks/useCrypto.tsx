@@ -60,8 +60,10 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
     const legacyConversionKey = useRef<{ generation: string; key: CryptoKey } | null>(null);
     // Kept for the unlocked session so background sync never re-prompts a passkey.
     const deviceAuthorization = useRef<{ deviceId: string; token: string } | null>(null);
+    // Concurrent callers share one passkey request; parallel WebAuthn requests abort each other.
+    const deviceAuthorizationRequest = useRef<Promise<{ deviceId: string; token: string }> | null>(null);
     const attestedDevice = useRef('');
-    const clearKeys = useCallback(() => { keyEpoch.current++; masterKey.current?.fill(0); masterKey.current = null; preparedMasterKey.current?.fill(0); preparedMasterKey.current = null; preparedMasterKeyGeneration.current = null; preparedMasterKeyBootstrap.current = false; legacyConversionKey.current = null; deviceAuthorization.current = null; keyGeneration.current = null; setEncryptionKey(null); setLeaseExpiresAt(null); }, []);
+    const clearKeys = useCallback(() => { keyEpoch.current++; masterKey.current?.fill(0); masterKey.current = null; preparedMasterKey.current?.fill(0); preparedMasterKey.current = null; preparedMasterKeyGeneration.current = null; preparedMasterKeyBootstrap.current = false; legacyConversionKey.current = null; deviceAuthorization.current = null; deviceAuthorizationRequest.current = null; keyGeneration.current = null; setEncryptionKey(null); setLeaseExpiresAt(null); }, []);
     const refreshSettings = useCallback(async () => {
         if (!userId) return; const version = ++request.current;
         try { const next = await loadVaultState(userId, !canSync); if (request.current !== version) return;
@@ -183,14 +185,19 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
     const getDeviceAuthorization = useCallback(async () => {
         if (!encryptionKey || !user) throw new Error('Unlock an approved device first.');
         if (deviceAuthorization.current) return deviceAuthorization.current;
+        if (deviceAuthorizationRequest.current) return deviceAuthorizationRequest.current;
         const epoch = keyEpoch.current;
-        const local = await loadDeviceState(user.id); if (!local) throw new Error('Device enrollment state is missing.');
-        const key = local.protectionMode === 'remembered' ? local.rememberedKey : await unlockPasskey(local.protection as never);
-        if (!key) throw new Error('Unlock this device to authorize the request.');
-        const bundle = await decryptDeviceBundle(local, key);
-        const authorization = { deviceId: local.deviceId, token: bundle.authorizationToken };
-        if (keyEpoch.current === epoch) deviceAuthorization.current = authorization;
-        return authorization;
+        const request = (async () => {
+            const local = await loadDeviceState(user.id); if (!local) throw new Error('Device enrollment state is missing.');
+            const key = local.protectionMode === 'remembered' ? local.rememberedKey : await unlockPasskey(local.protection as never);
+            if (!key) throw new Error('Unlock this device to authorize the request.');
+            const bundle = await decryptDeviceBundle(local, key);
+            const authorization = { deviceId: local.deviceId, token: bundle.authorizationToken };
+            if (keyEpoch.current === epoch) deviceAuthorization.current = authorization;
+            return authorization;
+        })();
+        deviceAuthorizationRequest.current = request;
+        try { return await request; } finally { if (deviceAuthorizationRequest.current === request) deviceAuthorizationRequest.current = null; }
     }, [encryptionKey, user]);
     // Migrations wrap a new vault key only for public keys attested under the current key.
     useEffect(() => {
