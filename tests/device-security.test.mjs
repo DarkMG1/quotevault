@@ -143,3 +143,28 @@ test('decrypting a passkey bundle binds the exact stored protection', async () =
   await assert.rejects(api.decryptDeviceBundle(matching, key), /post-binding/);
   await assert.rejects(api.decryptDeviceBundle({ ...matching, protection: { ...protection, credentialId: 'AQID' } }, key), /AAD mismatch/);
 });
+
+test('passkey unlock accepts the PRF value in every byte representation providers return', async () => {
+  const prf = Uint8Array.from({ length: 32 }, (_, index) => index * 7 + 1);
+  const b64 = Buffer.from(prf).toString('base64');
+  const padded = new Uint8Array(40); padded.set(prf, 5);
+  const shapes = {
+    arrayBuffer: prf.slice().buffer,
+    view: padded.subarray(5, 37),
+    base64url: b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+    base64: b64,
+    serializedBytes: Object.fromEntries([...prf].map((value, index) => [String(index), value])),
+    numberArray: [...prf],
+  };
+  const protection = { version: 1, rpId: 'quotes.darkmg1.dev', credentialId: 'AQID', prfSalt: fingerprint, kdf: 'HKDF-SHA-256' };
+  const unlockWith = first => setup({ navigatorValue: { credentials: { get: async () => ({ rawId: Uint8Array.from([1, 2, 3]).buffer, getClientExtensionResults: () => ({ prf: { results: { first } } }) }) } } }).api.unlockPasskey(protection);
+  const iv = new Uint8Array(12);
+  const reference = await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv }, await unlockWith(shapes.arrayBuffer), new TextEncoder().encode('bundle'));
+  for (const [name, first] of Object.entries(shapes)) {
+    const key = await unlockWith(first);
+    assert.equal(new TextDecoder().decode(await webcrypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, reference)), 'bundle', `${name} derives the same key`);
+  }
+  await assert.rejects(unlockWith(b64.slice(0, 40)), /does not support PRF/, 'a short value is rejected');
+  await assert.rejects(unlockWith(new Uint8Array(31).buffer), /does not support PRF/, 'a 31-byte value is rejected');
+  await assert.rejects(unlockWith(42), /does not support PRF.*number/, 'an unknown type is rejected and named');
+});
