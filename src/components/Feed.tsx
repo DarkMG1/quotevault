@@ -34,14 +34,12 @@ export const Feed = () => {
     const [syncRetryError, setSyncRetryError] = useState('');
     const deleteDialogRef = useRef<HTMLDialogElement>(null);
     const cancelDeleteRef = useRef<HTMLButtonElement>(null);
-    const decryptionRequest = useRef(0);
     const decryptCache = useRef<DecryptCache | undefined>(undefined);
     const isAdmin = isAdminUser(user);
 
     useModalDialog(deleteDialogRef, Boolean(quoteToDelete), () => setQuoteToDelete(null), cancelDeleteRef);
 
     useEffect(() => {
-        const requestId = ++decryptionRequest.current;
         let active = true;
         if (!quotes) {
             return () => { active = false; };
@@ -51,7 +49,7 @@ export const Feed = () => {
         decryptCache.current = cache;
         decrypted
             .then((mapped) => {
-                if (active && requestId === decryptionRequest.current) setDecryptedQuotes(mapped);
+                if (active) setDecryptedQuotes(mapped);
             });
         return () => { active = false; };
     }, [quotes, encryptionKey]);
