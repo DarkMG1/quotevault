@@ -15,7 +15,7 @@ const importer = loadModule('src/lib/quote-import.ts', {
   './crypto': crypt, './db': { db }, '../components/ui': ui, './sync': { processSyncQueue: async () => true },
   './supabase': { supabase: { rpc: (name, args) => ({ abortSignal: async () => { calls.push({name, args}); return handler(name, args); } }) } },
 }, { crypto: webcrypto, TextEncoder, AbortController, setTimeout, clearTimeout, navigator: { onLine: true } });
-const raw = { text: 'Synthetic private words', author: 'Ada', context: 'Synthetic context', source_sender: 'Grace',
+const raw = { text: 'Synthetic private words', author: 'Adalinde Synthetic', context: 'Synthetic context', source_sender: 'Gracewell Synthetic',
   source: { id: 'a'.repeat(64), timestamp: 'Sep 21, 2026  1:00:00 PM' } };
 const file = value => JSON.stringify({ format: 'quotevault-reviewed-quotes', version: 1, quotes: value });
 const rows = importer.parseImportFile(file([raw]));
@@ -25,7 +25,7 @@ assert.throws(() => importer.parseImportFile(file([{ ...raw, quote_date: '2026-0
 assert.throws(() => importer.parseImportFile(file([{ ...raw, text: {} }])), /text/);
 assert.throws(() => importer.parseImportFile(file([{ ...raw, source: { id: 'invalid' } }])), /identity/);
 assert.throws(() => importer.parseImportFile(file(Array(501).fill(raw))), /500/);
-assert.equal(importer.checkImports(rows, [{text: ' synthetic  PRIVATE words ', author: 'ADA'}])[0].duplicate, true);
+assert.equal(importer.checkImports(rows, [{text: ' synthetic  PRIVATE words ', author: 'ADALINDE SYNTHETIC'}])[0].duplicate, true);
 assert.equal(importer.checkImports(rows, [{text: 'User changed the wording', author: 'Different', import_source_id: 'a'.repeat(64)}])[0].duplicate, true);
 assert.equal(importer.checkImports([...rows, ...rows], [])[1].duplicate, true);
 assert.equal(importer.checkImports([{...rows[0], author: 'Ada & Grace'}], [{text: raw.text, author: 'Grace & Ada'}])[0].duplicate, true);
