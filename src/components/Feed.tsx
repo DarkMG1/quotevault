@@ -14,8 +14,13 @@ import { NO_FILTERS, authorParticipants, filterQuotes, type QuoteFilters } from 
 import { FilterBar } from './FilterBar';
 import { QuoteCard } from './QuoteCard';
 
+const secondaryButton = 'rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:text-white';
+
 export const Feed = () => {
-    const { quotes, loading, isSyncing, initialFetchPending, pendingCount, lastSyncedAt, refresh, deleteQuote, syncError, syncErrors, retrySyncOperation } = useQuotes();
+    const {
+        quotes, loading, isSyncing, initialFetchPending, pendingCount, lastSyncedAt,
+        refresh, deleteQuote, syncError, syncErrors, retrySyncOperation,
+    } = useQuotes();
     const { user } = useAuth();
     const { encryptionKey } = useCrypto();
     const [importOpen, setImportOpen] = useState(false);
@@ -52,11 +57,14 @@ export const Feed = () => {
     }, [quotes, encryptionKey]);
 
     const displayQuotes = useMemo(() => decryptedQuotes ?? [], [decryptedQuotes]);
-    const waitingForInitialSync = initialFetchPending && quotes?.length === 0 && typeof navigator !== 'undefined' && navigator.onLine;
+    const waitingForInitialSync = initialFetchPending && quotes?.length === 0
+        && typeof navigator !== 'undefined' && navigator.onLine;
     const isLoadingFeed = loading || waitingForInitialSync || (quotes !== undefined && decryptedQuotes === null);
     const filteredQuotes = useMemo(() => filterQuotes(displayQuotes, filters), [displayQuotes, filters]);
     // Cards that drop out of the list stay rendered, in place, while they fade out.
-    const [rendered, setRendered] = useState(() => ({ source: filteredQuotes, cards: filteredQuotes.map(quote => ({ quote, leaving: false })) }));
+    const [rendered, setRendered] = useState(() => ({
+        source: filteredQuotes, cards: filteredQuotes.map(quote => ({ quote, leaving: false })),
+    }));
     if (rendered.source !== filteredQuotes) {
         const ids = new Set(filteredQuotes.map(quote => quote.id));
         const cards = filteredQuotes.map(quote => ({ quote, leaving: false }));
@@ -65,10 +73,13 @@ export const Feed = () => {
         });
         setRendered({ source: filteredQuotes, cards });
     }
-    const { cards } = rendered;
     const authors = useMemo(() => authorParticipants(displayQuotes), [displayQuotes]);
     const clearFilters = () => setFilters(current => ({ ...NO_FILTERS, order: current.order }));
     const filtering = Boolean(filters.text.trim() || filters.author || filters.from || filters.to);
+    const syncStatus = pendingCount > 0 ? `${pendingCount} change${pendingCount === 1 ? '' : 's'} waiting to sync.`
+        : initialFetchPending ? 'Syncing quotes…'
+            : lastSyncedAt ? `Last synced ${new Date(lastSyncedAt).toLocaleTimeString()}.`
+                : '';
 
     const confirmDelete = async () => {
         if (!quoteToDelete || isDeleting) return;
@@ -98,8 +109,8 @@ export const Feed = () => {
             {importOpen && <ImportQuotes onClose={() => setImportOpen(false)} />}
             {matchingAuthors && isAdmin && <MatchAuthors onClose={() => setMatchingAuthors(false)} />}
             {quoteToEdit && isAdmin && <AddQuote edit={quoteToEdit} onClose={() => setQuoteToEdit(null)} />}
-            <button className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:text-white" onClick={() => setImportOpen(true)}>Import quotes</button>
-            {isAdmin && <button className="ml-3 rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:text-white" onClick={() => setMatchingAuthors(true)}>Match imported authors</button>}
+            <button className={secondaryButton} onClick={() => setImportOpen(true)}>Import quotes</button>
+            {isAdmin && <button className={`ml-3 ${secondaryButton}`} onClick={() => setMatchingAuthors(true)}>Match imported authors</button>}
             <FilterBar filters={filters} setFilters={setFilters} onClear={clearFilters} authors={authors}
                 shown={filteredQuotes.length} total={displayQuotes.length}>
                 <button
@@ -116,21 +127,35 @@ export const Feed = () => {
                 </button>
             </FilterBar>
 
-            {syncRetryError && <p role="alert" className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">{syncRetryError}</p>}
-            {(initialFetchPending || pendingCount > 0 || lastSyncedAt) && <p role="status" aria-live="polite" className="text-xs text-slate-500">
-                {pendingCount > 0 ? `${pendingCount} change${pendingCount === 1 ? '' : 's'} waiting to sync.` : initialFetchPending ? 'Syncing quotes…' : `Last synced ${new Date(lastSyncedAt as string).toLocaleTimeString()}.`}
-            </p>}
-            {syncError && <p role="alert" className="rounded-xl border border-orange-500/20 bg-orange-500/10 p-3 text-sm text-orange-200">{syncError}</p>}
-            {syncErrors && syncErrors.length > 0 && <div className="space-y-2" role="status">
-                {syncErrors.map((error) => <div key={error.operation_id} className="flex items-center justify-between gap-3 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
-                    <span>{error.status === 'blocked' ? (error.error || 'This older quote must be re-added after unlocking the current vault.') : (error.error || 'This quote could not be synchronized.')}</span>
-                    {error.status !== 'blocked' && <button type="button" onClick={() => void handleRetrySync(error.operation_id)} className="shrink-0 font-medium text-red-200 underline">Retry</button>}
-                </div>)}
-            </div>}
+            {syncRetryError && (
+                <p role="alert" className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">{syncRetryError}</p>
+            )}
+            {syncStatus && <p role="status" aria-live="polite" className="text-xs text-slate-500">{syncStatus}</p>}
+            {syncError && (
+                <p role="alert" className="rounded-xl border border-orange-500/20 bg-orange-500/10 p-3 text-sm text-orange-200">{syncError}</p>
+            )}
+            {syncErrors && syncErrors.length > 0 && (
+                <div className="space-y-2" role="status">
+                    {syncErrors.map(error => (
+                        <div key={error.operation_id} className="flex items-center justify-between gap-3 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
+                            <span>
+                                {error.error || (error.status === 'blocked'
+                                    ? 'This older quote must be re-added after unlocking the current vault.'
+                                    : 'This quote could not be synchronized.')}
+                            </span>
+                            {error.status !== 'blocked' && (
+                                <button type="button" onClick={() => void handleRetrySync(error.operation_id)} className="shrink-0 font-medium text-red-200 underline">
+                                    Retry
+                                </button>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
 
             <div className="space-y-4 pb-20 overflow-x-hidden">
-                {cards.map(({ quote, leaving }) => {
-                    return <QuoteCard
+                {rendered.cards.map(({ quote, leaving }) => (
+                    <QuoteCard
                         key={quote.id}
                         quote={quote}
                         canEdit={isAdmin}
@@ -147,24 +172,65 @@ export const Feed = () => {
                             setDeleteError('');
                             setQuoteToDelete(quote);
                         }}
-                    />;
-                })}
+                    />
+                ))}
 
-                {filteredQuotes.length === 0 && displayQuotes.length > 0 && filtering && <div className="py-12 text-center text-slate-400"><p>No quotes match these filters.</p><button type="button" onClick={clearFilters} className="mt-3 text-primary-400 hover:text-white">Clear all filters</button></div>}
-                {isLoadingFeed && displayQuotes.length === 0 && <div role="status" aria-live="polite" className="text-center py-20 px-6 text-slate-400"><RefreshCw aria-hidden="true" className="w-8 h-8 animate-spin text-primary-400 mx-auto mb-4" /><p>Loading quotes…</p></div>}
-                {!isLoadingFeed && displayQuotes.length === 0 && <div className="text-center py-20 px-6"><div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 border border-slate-700"><span className="text-2xl">✍️</span></div><h3 className="text-xl font-medium text-white mb-2">No Quotes Yet</h3><p className="text-slate-400">Be the first to capture a memorable quote!</p></div>}
+                {filteredQuotes.length === 0 && displayQuotes.length > 0 && filtering && (
+                    <div className="py-12 text-center text-slate-400">
+                        <p>No quotes match these filters.</p>
+                        <button type="button" onClick={clearFilters} className="mt-3 text-primary-400 hover:text-white">Clear all filters</button>
+                    </div>
+                )}
+                {isLoadingFeed && displayQuotes.length === 0 && (
+                    <div role="status" aria-live="polite" className="text-center py-20 px-6 text-slate-400">
+                        <RefreshCw aria-hidden="true" className="w-8 h-8 animate-spin text-primary-400 mx-auto mb-4" />
+                        <p>Loading quotes…</p>
+                    </div>
+                )}
+                {!isLoadingFeed && displayQuotes.length === 0 && (
+                    <div className="text-center py-20 px-6">
+                        <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 border border-slate-700">
+                            <span className="text-2xl">✍️</span>
+                        </div>
+                        <h3 className="text-xl font-medium text-white mb-2">No Quotes Yet</h3>
+                        <p className="text-slate-400">Be the first to capture a memorable quote!</p>
+                    </div>
+                )}
             </div>
 
-            <dialog ref={deleteDialogRef} role="dialog" aria-labelledby="delete-quote-title" className="z-50 bg-slate-800 border border-slate-700 p-6 rounded-2xl shadow-xl max-w-sm w-[calc(100%-2rem)] text-white [&::backdrop]:bg-black/60 [&::backdrop]:backdrop-blur-sm">
+            <dialog
+                ref={deleteDialogRef}
+                role="dialog"
+                aria-labelledby="delete-quote-title"
+                className="z-50 bg-slate-800 border border-slate-700 p-6 rounded-2xl shadow-xl max-w-sm w-[calc(100%-2rem)] text-white [&::backdrop]:bg-black/60 [&::backdrop]:backdrop-blur-sm"
+            >
                 <div className="flex items-center justify-between gap-3">
-                    <h3 id="delete-quote-title" className="text-lg font-semibold flex items-center gap-2"><Trash2 aria-hidden="true" className="w-5 h-5 text-red-400" />Delete Quote</h3>
-                    <button type="button" onClick={() => setQuoteToDelete(null)} aria-label="Close delete quote dialog" className="rounded-full p-1 text-slate-400 hover:text-white"><X aria-hidden="true" className="h-5 w-5" /></button>
+                    <h3 id="delete-quote-title" className="text-lg font-semibold flex items-center gap-2">
+                        <Trash2 aria-hidden="true" className="w-5 h-5 text-red-400" />Delete Quote
+                    </h3>
+                    <button type="button" onClick={() => setQuoteToDelete(null)} aria-label="Close delete quote dialog" className="rounded-full p-1 text-slate-400 hover:text-white">
+                        <X aria-hidden="true" className="h-5 w-5" />
+                    </button>
                 </div>
-                <p className="text-slate-300 mt-2 mb-6 text-sm">Are you sure you want to completely delete this quote? This action cannot be undone.</p>
-                {deleteError && <p role="alert" className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">{deleteError}</p>}
+                <p className="text-slate-300 mt-2 mb-6 text-sm">
+                    Are you sure you want to completely delete this quote? This action cannot be undone.
+                </p>
+                {deleteError && (
+                    <p role="alert" className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">{deleteError}</p>
+                )}
                 <div className="flex gap-3 justify-end">
-                    <button ref={cancelDeleteRef} type="button" onClick={() => setQuoteToDelete(null)} className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors">Cancel</button>
-                    <button type="button" onClick={confirmDelete} disabled={isDeleting} aria-busy={isDeleting} className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 disabled:opacity-50 text-red-500 text-sm font-medium rounded-lg border border-red-500/20 transition-colors">{isDeleting ? 'Deleting…' : 'Delete Forever'}</button>
+                    <button ref={cancelDeleteRef} type="button" onClick={() => setQuoteToDelete(null)} className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors">
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        onClick={confirmDelete}
+                        disabled={isDeleting}
+                        aria-busy={isDeleting}
+                        className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 disabled:opacity-50 text-red-500 text-sm font-medium rounded-lg border border-red-500/20 transition-colors"
+                    >
+                        {isDeleting ? 'Deleting…' : 'Delete Forever'}
+                    </button>
                 </div>
             </dialog>
         </div>
