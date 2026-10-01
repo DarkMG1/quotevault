@@ -45,6 +45,15 @@ test.describe('without the service worker', () => {
     await expect(page.getByRole('alert')).not.toBeVisible();
   });
 
+  test('add quote opens even when no lazy chunk can load', async ({ page }) => {
+    await page.route('**/assets/AddQuote-*.js', route => route.abort());
+    await signIn(page);
+
+    await page.getByRole('button', { name: 'Add quote', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Add Quote' })).toBeVisible();
+    await expect(page.getByText('This screen could not load.')).toHaveCount(0);
+  });
+
   test('a feed dialog chunk that fails to load leaves the feed usable', async ({ page }) => {
     await page.route('**/assets/ImportQuotes-*.js', route => route.abort());
     await signIn(page);

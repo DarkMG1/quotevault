@@ -187,7 +187,7 @@ git diff --check
 Measured on 2026-10-01. Measure again before and after each item.
 
 1. **Bundle size.** `vite build` emits one JS chunk of **790 KB (237 KB gzip)** and warns about it.
-   - Lazy-load the rarely used screens (`Admin`, `ImportQuotes`, `MatchAuthors`, `AddQuote`, `Profile`, `Auth`) with `React.lazy`.
+   - Lazy-load the rarely used screens (`Admin`, `ImportQuotes`, `MatchAuthors`, `Profile`, `Auth`) with `React.lazy`. `AddQuote` stays a static import: it is the offline write path and must never fail to load (`tests/browser/offline.spec.ts` guards this).
    - Check what `framer-motion` costs. It's only used for the feed's swipe-to-delete and exit fade, so a small pointer-event plus CSS implementation may replace it. The swipe-to-delete behavior and its confirm dialog must stay.
    - Confirm the service-worker precache still covers every lazy chunk, so offline still works. Add a Playwright offline check.
 2. **Decryption churn.** `Feed.tsx:45` re-decrypts **every** quote whenever the quote list changes, including after each sync.
