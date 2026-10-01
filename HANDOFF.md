@@ -1,6 +1,6 @@
 # QuoteVault — Handoff for the optimization and cleanup agent
 
-You are taking over QuoteVault to **optimize, clean up, speed up, and fix bad code without changing what the app does**. This document is everything you need. Read it fully before touching anything. As of 2026-10-01, production serves `2067ee4` (the optimization work below); the previous release was `3d24e15`.
+You are taking over QuoteVault to **optimize, clean up, speed up, and fix bad code without changing what the app does**. This document is everything you need. Read it fully before touching anything. As of 2026-10-01, production serves `cc735b6` (the optimization work below plus an hourly update check); the previous release was `2067ee4`.
 
 ---
 
@@ -92,7 +92,7 @@ A private PWA where a small friend group saves memorable quotes. Members sign in
 ## 4. Production facts
 
 - **Site:** https://quotes.darkmg1.dev. nginx on host `vps` (`ssh vps`, user `dark`) serves `/home/dark/quotevault/current/dist`.
-- **Releases:** `/home/dark/quotevault/releases/<full SHA>`. `current` points at `2067ee4…`, and `previous` (a manual rollback symlink) at `3d24e15…`. The deploy script switches only `current`; repoint `previous` by hand after each deploy.
+- **Releases:** `/home/dark/quotevault/releases/<full SHA>`. `current` points at `cc735b6…`, and `previous` (a manual rollback symlink) at `2067ee4…`. The deploy script switches only `current`; repoint `previous` by hand after each deploy.
   - Keep at least the current and one compatible previous release.
   - `a1bb840` and `cd3e697` are older shared-key releases kept for rollback.
   - `/pages/quotevault` no longer exists. It was a stale checkout; don't recreate it.
@@ -173,7 +173,7 @@ git diff --check
 
 ## 7. Current state and open items
 
-- **Production:** shared-key schema, all 238 quotes verified. Release `2067ee4` is live; it builds on `3d24e15`'s rebuilt filters: one filter state, an exact-author picker, inclusive dates, removable chips, newest first by default with a toggle.
+- **Production:** shared-key schema, all 238 quotes verified. Release `cc735b6` is live; it builds on `3d24e15`'s rebuilt filters: one filter state, an exact-author picker, inclusive dates, removable chips, newest first by default with a toggle.
 - **Akash's device (`akashsarada@gmail.com`): resolved.**
   - It ran a pre-2026-09-20 cached build. On 2026-10-01 it uploaded its 14 queued quotes (224 → 238), and the operator confirmed **they display correctly**.
   - Its 3 rejected inserts were duplicates of quotes already on the server, and its 1 blocked delete came from the old app.
