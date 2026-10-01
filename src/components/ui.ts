@@ -49,7 +49,9 @@ export async function decryptQuoteForDisplay(quote: Quote, encryptionKey: Crypto
             ...(payload.context === undefined ? {} : { context: payload.context }),
             ...(payload.source_sender === undefined ? {} : { source_sender: payload.source_sender }),
         };
-    } catch {
+    } catch (cause) {
+        // Name only: a JSON.parse message can quote the decrypted plaintext.
+        console.error('Quote decryption failed:', cause instanceof Error ? cause.name : typeof cause);
         return { ...safeQuote, text: '🔒 Encrypted Payload (Decryption Failed)', author: 'Unknown' };
     }
 }

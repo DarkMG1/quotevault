@@ -48,6 +48,20 @@ const failedDecrypt = await invalidPayloadUi.decryptQuoteForDisplay({
 assert.equal(failedDecrypt.text, '🔒 Encrypted Payload (Decryption Failed)');
 assert.equal('source_sender' in failedDecrypt, false, 'failed decrypts must not expose top-level provenance');
 
+const logged = [];
+const loggingUi = load('src/components/ui.ts', {
+  react: { useEffect: () => {}, useRef: initial => ({ current: initial }) },
+  '../lib/crypto': { decryptData: async () => 'secret plaintext' },
+}, { console: { error: (...args) => logged.push(args.map(String).join(' ')) } });
+const unparsable = await loggingUi.decryptQuoteForDisplay({
+  id: 'q2b', text: '$$E2E$${"iv":"iv","data":"data"}', author: 'ENCRYPTED',
+  created_at: '2026-09-20T12:00:00Z', user_id: 'user-a', vault_generation: 'g1',
+}, {});
+assert.equal(unparsable.text, '🔒 Encrypted Payload (Decryption Failed)');
+assert.equal(logged.length, 1, 'decryption failures must be logged');
+assert.match(logged[0], /SyntaxError/);
+assert.doesNotMatch(logged[0], /secret/, 'the log must not carry plaintext');
+
 const cryptoModule = load('src/lib/crypto.ts', {}, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob, console });
 const encryptedUi = load('src/components/ui.ts', {
   react: { useEffect: () => {}, useRef: initial => ({ current: initial }) },
