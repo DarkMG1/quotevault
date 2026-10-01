@@ -125,7 +125,7 @@ export const FilterBar = ({ filters, setFilters, onClear, authors, shown, total,
             )}
 
             {chips.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2" aria-label="Active filters">
+                <div role="group" className="flex flex-wrap items-center gap-2" aria-label="Active filters">
                     {chips.map(chip => (
                         <span key={chip.key} className="inline-flex items-center gap-1 rounded-full border border-primary-500/30 bg-primary-500/10 py-1 pl-3 pr-1 text-sm text-slate-100">
                             {chip.label}

@@ -29,6 +29,9 @@ test('swiping a card left past the threshold asks to delete it, and the deleted 
   const card = page.locator('blockquote').filter({ hasText: text }).locator('..');
   const confirm = page.getByRole('dialog', { name: 'Delete Quote', exact: true });
   await expect(card).toBeVisible();
+  await page.getByLabel('Search quotes, authors or context').fill('swipe-to-delete');
+  await expect(page.getByRole('group', { name: 'Active filters' })).toContainText('Showing 1 of');
+  await page.getByRole('button', { name: 'Clear all', exact: true }).click();
 
   const start = await dragCard(page, card, -120, false);
   await expect(card).toHaveCSS('transform', 'matrix(1, 0, 0, 1, -60, 0)');

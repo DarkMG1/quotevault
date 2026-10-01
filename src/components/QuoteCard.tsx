@@ -30,6 +30,7 @@ export const QuoteCard = ({ quote, canEdit, canDelete, leaving, onLeft, onEdit, 
         return () => fade.cancel();
     }, [leaving]);
     const unsynced = quote.sync_status === 'pending' || quote.sync_status === 'rejected';
+    const syncLabel = quote.sync_status === 'rejected' ? 'Sync rejected' : 'Pending Sync';
 
     // Swipe left past 100px to ask for deletion. The card follows at half speed and never moves right.
     const startSwipe = (down: PointerEvent) => {
@@ -73,7 +74,7 @@ export const QuoteCard = ({ quote, canEdit, canDelete, leaving, onLeft, onEdit, 
             >
                 <div className="absolute top-4 right-4 text-xs">
                     {unsynced ? (
-                        <span title={quote.sync_status === 'rejected' ? 'Sync rejected' : 'Pending Sync'}>
+                        <span role="img" aria-label={syncLabel} title={syncLabel}>
                             <CloudOff aria-hidden="true" className={`w-4 h-4 ${quote.sync_status === 'rejected' ? 'text-red-400' : 'text-orange-400'}`} />
                         </span>
                     ) : (
