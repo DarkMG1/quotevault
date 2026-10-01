@@ -290,11 +290,14 @@ await (async () => {
 await (async () => {
   const { db, sync } = setup();
   await db.quotes.put(quote('stale'));
-  await enqueue(db, sync, 'INSERT', quote('stale'));
+  const pending = await enqueue(db, sync, 'INSERT', quote('stale'));
   await db.metadata.put({ id: 'sync-revision:u1:g1', value: 7 });
   await sync.clearLocalSyncState();
   assert.equal(db.quotes.rows.size, 0, 'vault reset removes stale cached ciphertext');
-  assert.equal(db.syncQueue.rows.size, 0, 'vault reset removes stale pending writes');
+  const kept = db.syncQueue.rows.get(pending.id);
+  assert.equal(kept?.status, 'blocked', 'vault reset keeps unsynced work as blocked, never deletes it');
+  assert.equal(JSON.stringify(kept.payload), JSON.stringify(pending.payload), 'blocked work keeps its ciphertext unchanged');
+  assert.equal(typeof kept.error, 'string', 'blocked work explains itself to the user');
   assert.equal(db.metadata.rows.size, 0, 'vault reset removes cached revisions');
 })();
 

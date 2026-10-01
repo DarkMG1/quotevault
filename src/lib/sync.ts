@@ -57,9 +57,19 @@ export async function clearLocalSyncState() {
     activeAbortController = null;
     await db.transaction('rw', db.quotes, db.syncQueue, db.metadata, async () => {
         await db.quotes.clear();
-        await db.syncQueue.clear();
+        await blockQueued(await db.syncQueue.toArray());
         await db.metadata.clear();
     });
+}
+
+// Work queued under an old key can never be sent, but is blocked rather than deleted so nothing is lost silently.
+async function blockQueued(items: SyncQueueItem[]) {
+    for (const item of items) {
+        await db.syncQueue.update(item.id, {
+            status: 'blocked',
+            error: 'The vault key changed before this change synchronized; re-add it after unlocking.'
+        });
+    }
 }
 
 /** Stops an obsolete request from applying its response without deleting pending data. */
@@ -145,14 +155,7 @@ async function rejectStaleGeneration(context: SyncContext, epoch: number) {
     await db.transaction('rw', db.quotes, db.syncQueue, async () => {
         if (epoch !== syncEpoch) return;
         await db.quotes.clear();
-        // Keep stale work: its ciphertext uses the old key, so it is blocked from sending, never deleted.
-        const stale = (await db.syncQueue.toArray()).filter(item => item.vault_generation === context.generation);
-        for (const item of stale) {
-            await db.syncQueue.update(item.id, {
-                status: 'blocked',
-                error: 'The vault key changed before this change synchronized; re-add it after unlocking.'
-            });
-        }
+        await blockQueued((await db.syncQueue.toArray()).filter(item => item.vault_generation === context.generation));
     });
     if (epoch === syncEpoch) context.onGenerationMismatch?.();
 }
