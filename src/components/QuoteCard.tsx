@@ -61,7 +61,8 @@ export const QuoteCard = ({ quote, canEdit, canDelete, leaving, onLeft, onEdit, 
 
     return (
         <div ref={card} className="relative rounded-2xl">
-            {canDelete && (
+            {/* Only while swiping: an always-present red panel shows through cards that paint late during fast scrolls. */}
+            {canDelete && !!offset && (
                 <div className="absolute inset-0 bg-red-500/80 rounded-2xl flex items-center justify-end px-8 z-0">
                     <Trash2 aria-hidden="true" className="w-6 h-6 text-white" />
                 </div>

@@ -33,8 +33,12 @@ test('swiping a card left past the threshold asks to delete it, and the deleted 
   await expect(page.getByRole('group', { name: 'Active filters' })).toContainText('Showing 1 of');
   await page.getByRole('button', { name: 'Clear all', exact: true }).click();
 
+  // The red delete panel exists only mid-swipe, so scrolling never paints it under a card.
+  const panel = card.locator('..').locator('.bg-red-500\\/80');
+  await expect(panel).toHaveCount(0);
   const start = await dragCard(page, card, -120, false);
   await expect(card).toHaveCSS('transform', 'matrix(1, 0, 0, 1, -60, 0)');
+  await expect(panel).toBeVisible();
   await page.mouse.move(start.x, start.y, { steps: 5 });
   await page.mouse.up();
   await expect(confirm).not.toBeVisible();
@@ -48,6 +52,7 @@ test('swiping a card left past the threshold asks to delete it, and the deleted 
   await confirm.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(confirm).not.toBeVisible();
   await expect(card).toHaveCSS('transform', 'none');
+  await expect(panel).toHaveCount(0);
 
   await dragCard(page, card, -250);
   await confirm.getByRole('button', { name: 'Delete Forever', exact: true }).click();
