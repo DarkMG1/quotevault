@@ -44,4 +44,22 @@ test.describe('without the service worker', () => {
     await expect(page.getByRole('button', { name: 'Add quote', exact: true })).toBeVisible();
     await expect(page.getByRole('alert')).not.toBeVisible();
   });
+
+  test('an add-quote chunk that fails to load leaves the app rendered', async ({ page }) => {
+    await page.route('**/assets/AddQuote-*.js', route => route.abort());
+    await signIn(page);
+
+    await page.getByRole('button', { name: 'Add quote', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('This screen could not load.');
+    await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
+  });
+
+  test('a feed dialog chunk that fails to load leaves the feed usable', async ({ page }) => {
+    await page.route('**/assets/ImportQuotes-*.js', route => route.abort());
+    await signIn(page);
+
+    await page.getByRole('button', { name: 'Import quotes', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('This screen could not load.');
+    await expect(page.getByRole('button', { name: 'Sync now', exact: true })).toBeVisible();
+  });
 });

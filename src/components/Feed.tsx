@@ -10,6 +10,7 @@ import { decryptForFeed, type DecryptCache } from './feed-decrypt';
 import { NO_FILTERS, authorParticipants, filterQuotes, type QuoteFilters } from '../lib/quote-search';
 import { FilterBar } from './FilterBar';
 import { QuoteCard } from './QuoteCard';
+import { ScreenErrorBoundary } from './ScreenErrorBoundary';
 
 const ImportQuotes = lazy(() => import('./ImportQuotes').then(m => ({ default: m.ImportQuotes })));
 const AddQuote = lazy(() => import('./AddQuote').then(m => ({ default: m.AddQuote })));
@@ -103,11 +104,11 @@ export const Feed = () => {
 
     return (
         <div className="px-4 py-6 space-y-6">
-            <Suspense fallback={null}>
+            <ScreenErrorBoundary><Suspense fallback={null}>
                 {importOpen && <ImportQuotes onClose={() => setImportOpen(false)} />}
                 {matchingAuthors && isAdmin && <MatchAuthors onClose={() => setMatchingAuthors(false)} />}
                 {quoteToEdit && isAdmin && <AddQuote edit={quoteToEdit} onClose={() => setQuoteToEdit(null)} />}
-            </Suspense>
+            </Suspense></ScreenErrorBoundary>
             <button className={secondaryButton} onClick={() => setImportOpen(true)}>Import quotes</button>
             {isAdmin && <button className={`ml-3 ${secondaryButton}`} onClick={() => setMatchingAuthors(true)}>Match imported authors</button>}
             <FilterBar filters={filters} setFilters={setFilters} onClear={clearFilters} authors={authors}

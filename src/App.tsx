@@ -3,7 +3,8 @@ import { Layout } from './components/Layout';
 import { Feed } from './components/Feed';
 import { CryptoProvider } from './hooks/useCrypto';
 import { QuotesProvider } from './hooks/useQuotes';
-import { Component, lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import { ScreenErrorBoundary } from './components/ScreenErrorBoundary';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 
 const AuthUI = lazy(() => import('./components/Auth').then(m => ({ default: m.AuthUI })));
@@ -15,19 +16,6 @@ const Spinner = () => (
     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
   </div>
 );
-
-// React logs the caught error; this keeps a failed screen chunk from blanking the whole app.
-class ScreenErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
-  state = { failed: false };
-  static getDerivedStateFromError() { return { failed: true }; }
-  render() {
-    if (!this.state.failed) return this.props.children;
-    return <div role="alert" className="p-4">
-      <p>This screen could not load. Check your connection and reload.</p>
-      <button type="button" onClick={() => window.location.reload()} className="mt-3 rounded-lg bg-slate-800 px-3 py-2 text-sm">Reload</button>
-    </div>;
-  }
-}
 
 function UpdateNotice() {
   const { needRefresh: [ready, setReady], updateServiceWorker } = useRegisterSW();
