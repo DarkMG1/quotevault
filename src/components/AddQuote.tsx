@@ -86,9 +86,18 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
             }
             const submitter = profiles.find(profile => profile.id === user?.id);
             const sourceSender = submitter ? authorLabel(submitter) :
-                [user?.user_metadata?.first_name, user?.user_metadata?.last_name].filter(value => typeof value === 'string' && value.trim()).join(' ');
-            if (!user || !sourceSender.trim()) throw new Error('Your name is unavailable. Update your profile before submitting a quote.');
-            const payloadToEncrypt = JSON.stringify({ text: text.trim(), author: author.trim(), context: context.trim(), ...(sourceSender.trim() ? { source_sender: sourceSender.trim() } : {}) });
+                [user?.user_metadata?.first_name, user?.user_metadata?.last_name]
+                    .filter(value => typeof value === 'string' && value.trim())
+                    .join(' ');
+            if (!user || !sourceSender.trim()) {
+                throw new Error('Your name is unavailable. Update your profile before submitting a quote.');
+            }
+            const payloadToEncrypt = JSON.stringify({
+                text: text.trim(),
+                author: author.trim(),
+                context: context.trim(),
+                ...(sourceSender.trim() ? { source_sender: sourceSender.trim() } : {}),
+            });
             const encryptedBundle = await encryptData(payloadToEncrypt, encryptionKey);
             if (!isCiphertextWithinLimit(encryptedBundle)) {
                 throw new Error('This quote is too large to save. Shorten the quote or context and try again.');
@@ -106,7 +115,8 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
     const authorParts = author.split(' & ');
     const toggleAuthor = (name: string, checked: boolean) => setAuthor((current) => {
         const parts = current.split(' & ');
-        return checked ? (parts.includes(name) ? current : [...parts.filter(Boolean), name].join(' & ')) : parts.filter(part => part !== name).join(' & ');
+        if (!checked) return parts.filter(part => part !== name).join(' & ');
+        return parts.includes(name) ? current : [...parts.filter(Boolean), name].join(' & ');
     });
 
     return (
@@ -121,23 +131,68 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
                     <QuoteIcon aria-hidden="true" className="w-5 h-5 text-primary-400" />
                     <h2 id="add-quote-title" className="text-xl font-semibold">{edit ? 'Edit Quote' : 'Add Quote'}</h2>
                 </div>
-                <button type="button" onClick={onClose} aria-label={edit ? 'Close edit quote dialog' : 'Close add quote dialog'} className="p-2 -mr-2 text-slate-400 hover:text-white transition-colors rounded-full hover:bg-white/5">
+                <button
+                    type="button"
+                    onClick={onClose}
+                    aria-label={edit ? 'Close edit quote dialog' : 'Close add quote dialog'}
+                    className="p-2 -mr-2 text-slate-400 hover:text-white transition-colors rounded-full hover:bg-white/5"
+                >
                     <X aria-hidden="true" className="w-5 h-5" />
                 </button>
             </div>
 
             <form onSubmit={handleSubmit} className="p-6 space-y-5 overflow-y-auto overscroll-contain max-h-[calc(85vh-5rem)]">
-                {saveError && <p role="alert" className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">{saveError}</p>}
-                {edit && <p className="text-sm text-slate-400">Editing requires a connection. Original sender and import history are preserved.</p>}
+                {saveError && (
+                    <p role="alert" className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">{saveError}</p>
+                )}
+                {edit && (
+                    <p className="text-sm text-slate-400">
+                        Editing requires a connection. Original sender and import history are preserved.
+                    </p>
+                )}
                 <div>
                     <label htmlFor="quote-text" className="block text-sm font-medium text-slate-300 mb-1">Quote</label>
-                    <textarea ref={textRef} id="quote-text" required value={text} onChange={(e) => setText(e.target.value)} placeholder="&quot;The only limit to our realization of tomorrow...&quot;" rows={4} className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all resize-none" />
+                    <textarea
+                        ref={textRef}
+                        id="quote-text"
+                        required
+                        value={text}
+                        onChange={(e) => setText(e.target.value)}
+                        placeholder="&quot;The only limit to our realization of tomorrow...&quot;"
+                        rows={4}
+                        className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all resize-none"
+                    />
                 </div>
 
                 <div>
-                    {profileError && <div role="alert" className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300"><span>{profileError}</span><button type="button" onClick={() => setProfileRetry((value) => value + 1)} className="font-medium text-red-200 underline">Retry</button></div>}
-                    {edit && <datalist id="quote-author-options">{profiles.map(profile => <option key={profile.id || authorLabel(profile)} value={authorLabel(profile)} />)}</datalist>}
-                    {edit && <><label htmlFor="quote-author" className="block text-sm font-medium text-slate-300 mb-1">Author</label><input id="quote-author" list="quote-author-options" required value={author} onChange={e => setAuthor(e.target.value)} className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-primary-500" /></>}
+                    {profileError && (
+                        <div role="alert" className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
+                            <span>{profileError}</span>
+                            <button
+                                type="button"
+                                onClick={() => setProfileRetry((value) => value + 1)}
+                                className="font-medium text-red-200 underline"
+                            >
+                                Retry
+                            </button>
+                        </div>
+                    )}
+                    {edit && (
+                        <datalist id="quote-author-options">
+                            {profiles.map(profile => <option key={profile.id || authorLabel(profile)} value={authorLabel(profile)} />)}
+                        </datalist>
+                    )}
+                    {edit && <>
+                        <label htmlFor="quote-author" className="block text-sm font-medium text-slate-300 mb-1">Author</label>
+                        <input
+                            id="quote-author"
+                            list="quote-author-options"
+                            required
+                            value={author}
+                            onChange={e => setAuthor(e.target.value)}
+                            className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+                        />
+                    </>}
                     <fieldset disabled={isLoadingProfiles} className="mt-2">
                         <legend className="block text-sm font-medium text-slate-300 mb-1">{edit ? 'Add profile authors' : 'Author'}</legend>
                         <p className="mb-2 text-sm text-slate-400">Choose one or more people.</p>
@@ -145,7 +200,20 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
                             {profiles.map((profile) => {
                                 const displayName = authorLabel(profile);
                                 const selected = authorParts.includes(displayName);
-                                return <label key={profile.id ?? displayName} className="flex min-h-11 items-center gap-3 rounded-xl border border-slate-700 bg-slate-800/50 px-3 py-2 text-white disabled:opacity-60"><input type="checkbox" checked={selected} disabled={selected && authorParts.length === 1} onChange={event => toggleAuthor(displayName, event.target.checked)} />{displayName}</label>;
+                                return (
+                                    <label
+                                        key={profile.id ?? displayName}
+                                        className="flex min-h-11 items-center gap-3 rounded-xl border border-slate-700 bg-slate-800/50 px-3 py-2 text-white disabled:opacity-60"
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={selected}
+                                            disabled={selected && authorParts.length === 1}
+                                            onChange={event => toggleAuthor(displayName, event.target.checked)}
+                                        />
+                                        {displayName}
+                                    </label>
+                                );
                             })}
                         </div>
                         {!isLoadingProfiles && !profiles.length && <p className="text-sm text-slate-400">No authors are available.</p>}
@@ -153,19 +221,42 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
                 </div>
 
                 <div>
-                    <label htmlFor="quote-context" className="block text-sm font-medium text-slate-300 mb-1">Context <span className="text-slate-500 font-normal">(Optional)</span></label>
-                    <textarea id="quote-context" rows={2} value={context} onChange={(e) => setContext(e.target.value)} placeholder="In a letter to a friend, 1945" className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all" />
+                    <label htmlFor="quote-context" className="block text-sm font-medium text-slate-300 mb-1">
+                        Context <span className="text-slate-500 font-normal">(Optional)</span>
+                    </label>
+                    <textarea
+                        id="quote-context"
+                        rows={2}
+                        value={context}
+                        onChange={(e) => setContext(e.target.value)}
+                        placeholder="In a letter to a friend, 1945"
+                        className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all"
+                    />
                 </div>
 
-                {edit?.display.source_sender && <p className="text-sm text-slate-400">Originally shared by {edit.display.source_sender}</p>}
+                {edit?.display.source_sender && (
+                    <p className="text-sm text-slate-400">Originally shared by {edit.display.source_sender}</p>
+                )}
 
                 <div className="max-w-full overflow-hidden">
-                    <label htmlFor="quote-date" className="block text-sm font-medium text-slate-300 mb-1">Date Said <span className="text-slate-500 font-normal">(Optional)</span></label>
-                    <input id="quote-date" type="date" value={quoteDate} onChange={(e) => setQuoteDate(e.target.value)} className="w-full max-w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all [color-scheme:dark]" />
+                    <label htmlFor="quote-date" className="block text-sm font-medium text-slate-300 mb-1">
+                        Date Said <span className="text-slate-500 font-normal">(Optional)</span>
+                    </label>
+                    <input
+                        id="quote-date"
+                        type="date"
+                        value={quoteDate}
+                        onChange={(e) => setQuoteDate(e.target.value)}
+                        className="w-full max-w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all [color-scheme:dark]"
+                    />
                 </div>
 
                 <div className="pt-4 mt-auto">
-                    <button type="submit" disabled={isSubmitting || (!!edit && !canSync)} className="w-full bg-primary-600 hover:bg-primary-500 disabled:opacity-50 text-white font-medium py-3.5 rounded-xl transition-colors flex items-center justify-center space-x-2">
+                    <button
+                        type="submit"
+                        disabled={isSubmitting || (!!edit && !canSync)}
+                        className="w-full bg-primary-600 hover:bg-primary-500 disabled:opacity-50 text-white font-medium py-3.5 rounded-xl transition-colors flex items-center justify-center space-x-2"
+                    >
                         <Save aria-hidden="true" className="w-5 h-5" />
                         <span>{isSubmitting ? 'Saving...' : edit ? 'Save Changes' : 'Save Quote'}</span>
                     </button>
