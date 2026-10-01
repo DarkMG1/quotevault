@@ -1,7 +1,7 @@
 import { ImportQuotes } from './ImportQuotes';
 import { AddQuote } from './AddQuote';
 import { MatchAuthors } from './MatchAuthors';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, CloudOff, Cloud, RefreshCw, Trash2, Pencil, X, SlidersHorizontal, ArrowDownWideNarrow, ArrowUpNarrowWide } from 'lucide-react';
 import { useQuotes } from '../hooks/useQuotes';
 import { useAuth } from '../hooks/useAuth';
@@ -53,11 +53,11 @@ export const Feed = () => {
         return () => { active = false; };
     }, [quotes, encryptionKey]);
 
-    const displayQuotes = decryptedQuotes || [];
+    const displayQuotes = useMemo(() => decryptedQuotes ?? [], [decryptedQuotes]);
     const waitingForInitialSync = initialFetchPending && quotes?.length === 0 && typeof navigator !== 'undefined' && navigator.onLine;
     const isLoadingFeed = loading || waitingForInitialSync || (quotes !== undefined && decryptedQuotes === null);
-    const filteredQuotes = filterQuotes(displayQuotes, filters);
-    const authors = authorParticipants(displayQuotes);
+    const filteredQuotes = useMemo(() => filterQuotes(displayQuotes, filters), [displayQuotes, filters]);
+    const authors = useMemo(() => authorParticipants(displayQuotes), [displayQuotes]);
     const updateFilters = (patch: Partial<QuoteFilters>) => setFilters(current => ({ ...current, ...patch }));
     const clearFilters = () => setFilters(current => ({ ...NO_FILTERS, order: current.order }));
     const panelFilterCount = [filters.author, filters.from || filters.to].filter(Boolean).length;
