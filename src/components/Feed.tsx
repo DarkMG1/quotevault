@@ -2,17 +2,17 @@ import { ImportQuotes } from './ImportQuotes';
 import { AddQuote } from './AddQuote';
 import { MatchAuthors } from './MatchAuthors';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CloudOff, Cloud, RefreshCw, Trash2, Pencil, X } from 'lucide-react';
+import { RefreshCw, Trash2, X } from 'lucide-react';
 import { useQuotes } from '../hooks/useQuotes';
 import { useAuth } from '../hooks/useAuth';
 import { useCrypto } from '../hooks/useCrypto';
 import { isAdminUser } from '../lib/access';
-import { motion, AnimatePresence } from 'framer-motion';
 import type { Quote } from '../types';
 import { getErrorMessage, useModalDialog } from './ui';
 import { decryptForFeed, type DecryptCache } from './feed-decrypt';
 import { NO_FILTERS, authorParticipants, filterQuotes, type QuoteFilters } from '../lib/quote-search';
 import { FilterBar } from './FilterBar';
+import { QuoteCard } from './QuoteCard';
 
 export const Feed = () => {
     const { quotes, loading, isSyncing, initialFetchPending, pendingCount, lastSyncedAt, refresh, deleteQuote, syncError, syncErrors, retrySyncOperation } = useQuotes();
@@ -55,6 +55,17 @@ export const Feed = () => {
     const waitingForInitialSync = initialFetchPending && quotes?.length === 0 && typeof navigator !== 'undefined' && navigator.onLine;
     const isLoadingFeed = loading || waitingForInitialSync || (quotes !== undefined && decryptedQuotes === null);
     const filteredQuotes = useMemo(() => filterQuotes(displayQuotes, filters), [displayQuotes, filters]);
+    // Cards that drop out of the list stay rendered, in place, while they fade out.
+    const [rendered, setRendered] = useState(() => ({ source: filteredQuotes, cards: filteredQuotes.map(quote => ({ quote, leaving: false })) }));
+    if (rendered.source !== filteredQuotes) {
+        const ids = new Set(filteredQuotes.map(quote => quote.id));
+        const cards = filteredQuotes.map(quote => ({ quote, leaving: false }));
+        rendered.cards.forEach((card, index) => {
+            if (!ids.has(card.quote.id)) cards.splice(index, 0, { quote: card.quote, leaving: true });
+        });
+        setRendered({ source: filteredQuotes, cards });
+    }
+    const { cards } = rendered;
     const authors = useMemo(() => authorParticipants(displayQuotes), [displayQuotes]);
     const clearFilters = () => setFilters(current => ({ ...NO_FILTERS, order: current.order }));
     const filtering = Boolean(filters.text.trim() || filters.author || filters.from || filters.to);
@@ -118,46 +129,26 @@ export const Feed = () => {
             </div>}
 
             <div className="space-y-4 pb-20 overflow-x-hidden">
-                <AnimatePresence>
-                    {filteredQuotes.map((quote) => {
-                        const canDelete = quote.user_id === user?.id || isAdmin;
-                        return <motion.div key={quote.id} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="relative rounded-2xl">
-                            {canDelete && <div className="absolute inset-0 bg-red-500/80 rounded-2xl flex items-center justify-end px-8 z-0"><Trash2 aria-hidden="true" className="w-6 h-6 text-white" /></div>}
-                            <motion.div
-                                drag={canDelete ? 'x' : false}
-                                dragConstraints={{ left: 0, right: 0 }}
-                                dragElastic={{ left: 0.5, right: 0 }}
-                                onDragEnd={(_e, info) => {
-                                    if (canDelete && info.offset.x < -100) {
-                                        setDeleteError('');
-                                        setQuoteToDelete(quote);
-                                    }
-                                }}
-                                className="bg-slate-800/40 backdrop-blur-sm border border-slate-700/50 p-5 rounded-2xl relative z-10 group bg-surface touch-pan-y"
-                            >
-                                <div className="absolute top-4 right-4 text-xs">
-                                    {quote.sync_status === 'pending' || quote.sync_status === 'rejected' ? <span title={quote.sync_status === 'rejected' ? 'Sync rejected' : 'Pending Sync'}><CloudOff aria-hidden="true" className={`w-4 h-4 ${quote.sync_status === 'rejected' ? 'text-red-400' : 'text-orange-400'}`} /></span> : <span title="Synced"><Cloud aria-hidden="true" className="w-4 h-4 text-emerald-400/50 opacity-0 group-hover:opacity-100 transition-opacity" /></span>}
-                                </div>
-                                <blockquote className="text-lg md:text-xl font-medium text-slate-200 mb-4 leading-relaxed pr-8 select-text whitespace-pre-wrap">"{quote.text}"</blockquote>
-                                <div className="flex items-center justify-between text-sm">
-                                    <div className="font-semibold text-primary-400">— {quote.author}</div>
-                                    <div className="text-slate-500 select-none">{new Date(quote.quote_date || quote.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}</div>
-                                </div>
-                                {quote.context && <div className="mt-3 pt-3 border-t border-slate-700/30 text-sm text-slate-400 italic select-text">Context: {quote.context}</div>}
-                                {quote.source_sender && <div className="mt-3 text-sm text-slate-400 select-text">Originally shared by {quote.source_sender}</div>}
-                                {isAdmin && <button type="button" disabled={quote.sync_status === 'pending' || quote.sync_status === 'rejected'} onClick={() => {
-                                    const stored = quotes?.find(item => item.id === quote.id);
-                                    if (stored) setQuoteToEdit({ stored, display: quote });
-                                }} aria-label={`Edit quote by ${quote.author}`} className="mt-4 mr-3 inline-flex items-center gap-2 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-700/50 disabled:opacity-50">
-                                    <Pencil aria-hidden="true" className="h-4 w-4" /> Edit
-                                </button>}
-                                {canDelete && <button type="button" onClick={() => { setDeleteError(''); setQuoteToDelete(quote); }} aria-label={`Delete quote by ${quote.author}`} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-red-500/20 px-3 py-2 text-sm font-medium text-red-400 hover:bg-red-500/10">
-                                    <Trash2 aria-hidden="true" className="h-4 w-4" /> Delete
-                                </button>}
-                            </motion.div>
-                        </motion.div>;
-                    })}
-                </AnimatePresence>
+                {cards.map(({ quote, leaving }) => {
+                    return <QuoteCard
+                        key={quote.id}
+                        quote={quote}
+                        canEdit={isAdmin}
+                        canDelete={quote.user_id === user?.id || isAdmin}
+                        leaving={leaving}
+                        onLeft={() => setRendered(current => ({
+                            ...current, cards: current.cards.filter(card => !(card.leaving && card.quote.id === quote.id)),
+                        }))}
+                        onEdit={() => {
+                            const stored = quotes?.find(item => item.id === quote.id);
+                            if (stored) setQuoteToEdit({ stored, display: quote });
+                        }}
+                        onDelete={() => {
+                            setDeleteError('');
+                            setQuoteToDelete(quote);
+                        }}
+                    />;
+                })}
 
                 {filteredQuotes.length === 0 && displayQuotes.length > 0 && filtering && <div className="py-12 text-center text-slate-400"><p>No quotes match these filters.</p><button type="button" onClick={clearFilters} className="mt-3 text-primary-400 hover:text-white">Clear all filters</button></div>}
                 {isLoadingFeed && displayQuotes.length === 0 && <div role="status" aria-live="polite" className="text-center py-20 px-6 text-slate-400"><RefreshCw aria-hidden="true" className="w-8 h-8 animate-spin text-primary-400 mx-auto mb-4" /><p>Loading quotes…</p></div>}
