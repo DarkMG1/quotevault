@@ -55,7 +55,7 @@ Out of scope unless the operator asks:
 
 A private PWA where a small friend group saves memorable quotes. Members sign in (Supabase Auth, allowlisted emails only) and unlock the vault with the shared passphrase. They can read, add, edit (admin only), delete, import, and filter quotes, online or offline.
 
-**Stack:** React 19, TypeScript, Vite 7, Tailwind 3, `vite-plugin-pwa` (workbox, `registerType: 'prompt'`, so the page never auto-reloads), Dexie 4 (IndexedDB) with `dexie-react-hooks`, `@supabase/supabase-js` 2, `framer-motion` (feed swipe-to-delete and exit animations), and `lucide-react` icons.
+**Stack:** React 19, TypeScript, Vite 7, Tailwind 3, `vite-plugin-pwa` (workbox, `registerType: 'prompt'`, so the page never auto-reloads), Dexie 4 (IndexedDB) with `dexie-react-hooks`, `@supabase/supabase-js` 2, and `lucide-react` icons.
 
 **Data flow:**
 1. **Unlock.** `useCrypto` derives an AES-GCM key from the passphrase with PBKDF2, using the `vault_state.kdf` salt and iterations, and checks it against `vault_state.verifier`.
