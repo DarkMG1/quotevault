@@ -14,7 +14,7 @@ In scope:
 - Redundant work in sync and decryption.
 - Readability: the dense, very long lines in several components.
 - Splitting oversized components.
-- Dead code.
+- Dead code, and compatibility shims for app versions older than the current release (Section 2, item 6).
 - Small correctness bugs you find along the way. Prove each with a failing test first.
 
 Out of scope unless the operator asks:
@@ -43,7 +43,10 @@ Out of scope unless the operator asks:
    - Don't edit, rename, or delete anything in `supabase/migrations/`.
    - Any schema change needs a new file and operator approval, and is out of scope here.
    - `20260922020000`…`20261001000000` (envelope) and `20261002000000_remove_device_envelope.sql` (its removal) are applied in production. Never reapply one individually.
-6. **Old service-worker caches exist in the wild.** Some members' browsers ran very old cached builds (pre-2026-09-20). Changes to Dexie schema versions, queue item shapes, or the `$$E2E$$` format must stay backward compatible with data those clients wrote.
+6. **Old cached app versions are not supported.** Keeping a browser on the current build is the member's job: close every QuoteVault tab once to pick it up.
+   - You don't need to stay compatible with data or queue shapes written by older cached builds. Legacy shims for them can be deleted, e.g. the Dexie v1→v2 upgrade in `src/lib/db.ts`.
+   - What must keep working: the server data, the server schema and RPC contract, and the local data written by the **current** release.
+   - If a change would break a browser on an older build, the fix is "clear site data and reload", never a workaround in code.
 
 ---
 
@@ -151,7 +154,13 @@ git diff --check
 ## 6. How the operator wants you to work
 
 - **Terse communication.** No filler. Results first.
-- **"Ponytail" minimalism:** the smallest change that fixes the root cause. Reuse what exists. No speculative abstractions. Deleting beats adding.
+- **Use ponytail throughout the entire process: every task, review and commit.**
+  - Load the `ponytail:ponytail` skill at the start of the session and keep it active; don't drift back to over-building.
+  - Climb its ladder for every change: does this need to exist? Is it already in the codebase? Do the stdlib, the platform, or an installed dependency cover it? Can it be one line? Only then the minimum code.
+  - Fix root causes in the shared function, not symptoms in each caller.
+  - Shortest working diff, fewest files, no speculative abstractions. Deleting beats adding.
+  - Use the companion skills when they fit: `ponytail:ponytail-audit` and `ponytail:ponytail-debt` to find over-built code and cleanup targets, and `ponytail:ponytail-review` to review a diff before committing.
+  - Ponytail shortens the solution, never the understanding: read the code and trace the real flow before choosing the smallest fix.
 - **Research before editing:** read the file, and grep every caller before changing a function.
 - **TDD for behavior changes:** write a failing test, see it fail for the right reason, then fix it. For a pure refactor, prove behavior is unchanged with the existing tests plus a characterization test where coverage is thin.
 - **Verify before claiming done:** run the full sequence in Section 5 and report real output. If something fails, say so with the output.
@@ -164,12 +173,11 @@ git diff --check
 ## 7. Current state and open items
 
 - **Production:** shared-key schema, all 238 quotes verified. Release `3d24e15` is live with the rebuilt filters: one filter state, an exact-author picker, inclusive dates, removable chips, newest first by default with a toggle.
-- **Akash's device (`akashsarada@gmail.com`):** it ran a pre-2026-09-20 cached build.
-  - On 2026-10-01 it uploaded 14 queued quotes successfully (224 → 238).
-  - 3 queued inserts were rejected as duplicates, and 1 old delete is blocked by design.
-  - The old UI only offers **Retry** for those errors, which can never succeed. A small improvement in scope: let users **dismiss** a rejected or blocked queue item, with confirmation, but only when the item has no unsynced data at risk.
-  - **Unverified:** whether those 14 quotes (written by the old app in March) display correctly or as "Decryption Failed". The operator was asked to check, and to run a read-only `kdf` check: does `vault_state.kdf.salt` still equal base64 of `QuoteVault-FixedSalt-2026` with 100000 iterations? Ask the operator before assuming. Don't let Akash clear site data until both are confirmed.
-- **Some members may still have old cached service workers.** They need to close every tab once.
+- **Akash's device (`akashsarada@gmail.com`): resolved.**
+  - It ran a pre-2026-09-20 cached build. On 2026-10-01 it uploaded its 14 queued quotes (224 → 238), and the operator confirmed **they display correctly**.
+  - Its 3 rejected inserts were duplicates of quotes already on the server, and its 1 blocked delete came from the old app.
+  - Every quote is safely on the server, so clearing that browser's site data is safe and removes the leftover errors. Nothing to build for this.
+- **Members on old cached builds** must close every tab once to update (Section 2, item 6).
 
 ---
 
@@ -198,8 +206,9 @@ Measured on 2026-10-01. Measure again before and after each item.
    - the cross-tab Web Lock;
    - batching under 1 MiB;
    - generation-mismatch handling, which keeps queued work as `blocked` and never deletes it.
-6. **Dead code and dependencies.**
+6. **Dead code, legacy shims and dependencies.**
    - Check `src/lib/quote-authors.ts`, `src/components/ui.ts` and `src/types/index.ts` for unused exports.
+   - Delete compatibility code that exists only for builds older than the current release (Section 2, item 6). Example: the Dexie v1→v2 upgrade path and the "Deletion created before secure sync" handling in `src/lib/db.ts`. Keep the current schema version, and make sure a browser on the current release still opens its data.
    - Remove dependencies nothing imports.
    - Keep the `.gitignore` entry for `supabase/.temp/`.
 7. **Accessibility pass on touched components:** visible focus, labels, `role="alert"` on errors, and live regions for status. Don't regress what exists.
