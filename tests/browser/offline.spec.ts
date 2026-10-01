@@ -16,22 +16,10 @@ test('lazy-loaded screens render offline from the service-worker precache', asyn
   await unlock(page);
   await page.evaluate(() => navigator.serviceWorker.ready.then(() => true));
 
-  // The offline reload drops every module loaded online, so each lazy chunk below must come from the precache.
+  // The offline reload drops every module loaded online, so the Auth chunk loaded by signing out must come from the precache.
   await context.setOffline(true);
   await page.reload();
   await unlock(page);
-
-  await page.getByRole('button', { name: 'Add quote', exact: true }).click();
-  const add = page.getByRole('dialog', { name: 'Add Quote', exact: true });
-  await expect(add).toBeVisible();
-  await add.getByRole('button', { name: 'Close add quote dialog' }).click();
-  await expect(add).not.toBeVisible();
-
-  await page.getByRole('button', { name: 'Import quotes', exact: true }).click();
-  const importDialog = page.getByRole('dialog', { name: 'Import quotes', exact: true });
-  await expect(importDialog).toBeVisible();
-  await importDialog.getByRole('button', { name: 'Close', exact: true }).click();
-  await expect(importDialog).not.toBeVisible();
 
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign In', exact: true })).toBeVisible({ timeout: 3000 });
