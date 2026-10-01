@@ -1,121 +1,278 @@
-import { useEffect, useRef, useState } from 'react';
-import QRCode from 'qrcode';
-import { Download, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { isAdminUser, ADMIN_EMAIL } from '../lib/access';
-import { formatEnrollmentCode, getDeviceRequest, type DeviceRequest } from '../lib/device';
 import { useAuth } from '../hooks/useAuth';
+import { isAdminUser, ADMIN_EMAIL } from '../lib/access';
+import { createVaultConfig } from '../lib/crypto';
+import { cacheVaultState, parseVaultState } from '../lib/vault';
+import { clearLocalSyncState } from '../lib/sync';
 import { useCrypto } from '../hooks/useCrypto';
-import { getErrorMessage, useModalDialog } from './ui';
-import { abandonEnvelopeMigration, createEncryptedMigrationExport, getEnvelopeMigrationCoverage, getPendingEnvelopeMigration, loadMigrationSourceSnapshot, prepareEnvelopeMigration, runEnvelopeMigration, activateEnvelopeMigration, rollbackEnvelopeMigration, type EnvelopeMigrationCoverage } from '../lib/vault-migration';
-import { deriveQuoteKey, generateVaultMasterKey } from '../lib/device-crypto';
-import { encryptData } from '../lib/crypto';
-import { LegacyReversion } from './LegacyReversion';
-
-export function ApprovalRequest({ requestId, fingerprint }: { requestId: string; fingerprint: string }) {
-    const { approveDeviceRequest } = useCrypto();
-    const [request, setRequest] = useState<DeviceRequest | null>(null), [code, setCode] = useState(''), [expectedCode, setExpectedCode] = useState(''), [qr, setQr] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
-    useEffect(() => { let live = true; void (async () => { try { const next = await getDeviceRequest(requestId); if (next.enrollmentFingerprint !== fingerprint) throw new Error('This approval link does not match the pending device request.'); const nextCode = await formatEnrollmentCode(next.enrollmentFingerprint); const url = `https://quotes.darkmg1.dev/#approve?request=${requestId}&fingerprint=${encodeURIComponent(next.enrollmentFingerprint)}`; const image = await QRCode.toDataURL(url, { margin: 1, width: 240 }); if (live) { setRequest(next); setExpectedCode(nextCode); setQr(image); } } catch (cause) { if (live) setError(cause instanceof Error ? cause.message : 'Could not load the device request.'); } })(); return () => { live = false; }; }, [fingerprint, requestId]);
-    const approve = async () => { if (!request) return; setBusy(true); setError(''); try { await approveDeviceRequest(requestId, fingerprint, code); setError('Device approved. The requesting device can now unlock.'); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not approve this device.'); } finally { setBusy(false); } };
-    return <div className="px-4 py-8 space-y-5"><h2 className="text-2xl font-bold text-white">Approve device</h2>{error && <p role="alert" className="text-sm text-red-300">{error}</p>}{request && <><p className="text-slate-300">{request.label} · {request.protectionMode === 'passkey-prf' ? 'Passkey PRF' : 'Remembered browser'}</p><p className="text-sm text-slate-400">Compare this code with the requesting device before approving.</p><p className="font-mono text-2xl tracking-widest text-white">{expectedCode}</p>{qr && <img src={qr} alt="Requesting device approval QR code" className="bg-white p-2 rounded-xl" />}<label className="block text-sm text-slate-300">Verification code<input aria-label="Verification code" value={code} onChange={event => setCode(event.target.value)} autoComplete="off" className="mt-1 w-full rounded-xl bg-slate-900 border border-slate-700 p-3 text-white" /></label><button type="button" disabled={busy || code.trim().toUpperCase() !== expectedCode} onClick={() => void approve()} className="w-full bg-primary-600 disabled:opacity-50 py-3 rounded-xl">{busy ? 'Approving…' : 'Approve device'}</button></>}</div>;
-}
+import { ShieldAlert, Users, Plus, Trash2, Loader2, RefreshCw, AlertTriangle } from 'lucide-react';
+import { getErrorMessage } from './ui';
 
 export const AdminDashboard = () => {
     const { user } = useAuth();
-    const cryptoContext = useCrypto();
-    const { deviceId, deviceApproved, encryptionKey, envelopeStatus, vaultGeneration, getDeviceAuthorization } = cryptoContext;
+    const { vaultGeneration, lockVault } = useCrypto();
     const isAdmin = isAdminUser(user);
-    const [allowlist, setAllowlist] = useState<{ id: string; email: string }[]>([]);
-    const [email, setEmail] = useState('');
-    const [busy, setBusy] = useState(false);
-    const [error, setError] = useState('');
-    const [removeTarget, setRemoveTarget] = useState<{ id: string; email: string } | null>(null);
-    const removeDialog = useRef<HTMLDialogElement>(null), cancelRemove = useRef<HTMLButtonElement>(null);
-    useModalDialog(removeDialog, !!removeTarget, () => setRemoveTarget(null), cancelRemove);
+    const [allowlist, setAllowlist] = useState<{ id: string, email: string }[]>([]);
+    const [newEmail, setNewEmail] = useState('');
+    const [loading, setLoading] = useState(true);
+    const [isAdding, setIsAdding] = useState(false);
+    const [errorMsg, setErrorMsg] = useState('');
+    const [removingId, setRemovingId] = useState<string | null>(null);
 
-    const authorization = async () => deviceApproved && deviceId ? await getDeviceAuthorization() : null;
-    const refresh = async () => { setBusy(true); setError(''); try { const auth = await authorization(); const { data, error } = await supabase.rpc('list_members', { p_device_id: auth?.deviceId ?? null, p_device_token: auth?.token ?? null }); if (error) throw error; if (data === null || !Array.isArray(data)) throw new Error('Device authorization was denied. Unlock this device and retry.'); setAllowlist(data.filter((item): item is { id: string; email: string } => !!item && typeof item === 'object' && typeof item.id === 'string' && typeof item.email === 'string')); } catch (cause) { setError(getErrorMessage(cause, 'Could not load allowed emails.')); } finally { setBusy(false); } };
-    // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
-    useEffect(() => { if (isAdmin) void refresh(); }, [isAdmin]);
-    const add = async (event: React.FormEvent) => { event.preventDefault(); if (!email.trim()) return; setBusy(true); setError(''); try { const auth = await authorization(); const { data, error } = await supabase.rpc('add_member', { p_email: email.trim().toLowerCase(), p_device_id: auth?.deviceId ?? null, p_device_token: auth?.token ?? null }); if (error) throw error; if (data === null || typeof data !== 'object' || typeof data.email !== 'string') throw new Error('Device authorization was denied. Unlock this device and retry.'); setEmail(''); await refresh(); } catch (cause) { setError(getErrorMessage(cause, 'Could not add email.')); } finally { setBusy(false); } };
-    const remove = async (rotate: boolean) => {
-        const item = removeTarget; if (!item) return;
-        setBusy(true); setError(''); let targetKey: Uint8Array | null = null; let committed = false;
+    // Danger Zone State
+    const [vaultKey, setVaultKey] = useState('');
+    const [vaultConfirm, setVaultConfirm] = useState('');
+    const [isWiping, setIsWiping] = useState(false);
+    const [wipeErrorMsg, setWipeErrorMsg] = useState('');
+
+    const fetchAllowlist = async () => {
         try {
-            const auth = await authorization(); let targetGeneration: string | null = null; let targetVerifier: { iv: string; data: string } | null = null;
-            if (rotate) {
-                if (!auth || envelopeStatus !== 'active' || !vaultGeneration || !encryptionKey) throw new Error('Unlock an active device before starting encryption rotation.');
-                targetGeneration = crypto.randomUUID(); targetKey = generateVaultMasterKey();
-                targetVerifier = await encryptData(JSON.stringify({ quotevault: 1 }), await deriveQuoteKey(targetKey, targetGeneration));
-            }
-            const { data, error } = await supabase.rpc('remove_member_access', { p_member_id: item.id, p_device_id: auth?.deviceId ?? null, p_device_token: auth?.token ?? null, p_rotate: rotate, p_target_generation: targetGeneration, p_target_verifier: targetVerifier });
+            const { data, error } = await supabase.from('allowlist').select('*').order('email');
             if (error) throw error;
-            const expected = rotate ? 'removed_and_preparing_rotation' : 'removed';
-            if (data === null || typeof data !== 'object' || data.status !== expected || typeof data.id !== 'string' || rotate && data.target_generation !== targetGeneration) throw new Error('Device authorization was denied. Unlock this device and retry.');
-            committed = true;
-            if (rotate && targetKey && targetGeneration) { cryptoContext.setPreparedTargetMasterKey(targetGeneration, targetKey); await cryptoContext.refreshVaultState(); }
-            const ownerId = data.owner_id;
-            if (ownerId !== null && typeof ownerId !== 'string') throw new Error('Member access was removed, but their active session could not be invalidated.');
-            if (ownerId) { const invalidation = await supabase.functions.invoke('vault-security', { body: { action: 'invalidate_member_session', ownerId } }); if (invalidation.error || !invalidation.data || invalidation.data.ownerId !== ownerId || invalidation.data.status !== 'invalidated') throw new Error('Member access was removed, but their active session could not be invalidated.'); }
-            setRemoveTarget(null); await refresh();
-        } catch (cause) {
-            const message = committed ? getErrorMessage(cause, 'Member access was removed, but follow-up security checks need attention.') : getErrorMessage(cause, 'Could not remove email.');
-            if (committed) { setRemoveTarget(null); await refresh(); }
-            setError(message);
-        } finally { targetKey?.fill(0); setBusy(false); }
+            setAllowlist(data || []);
+            setErrorMsg('');
+        } catch (error: unknown) {
+            setErrorMsg(getErrorMessage(error, 'Failed to fetch allowlist. Make sure the table exists.'));
+        } finally {
+            setLoading(false);
+        }
     };
-    if (!isAdmin) return <div className="p-8 text-center"><ShieldAlert className="w-12 h-12 text-red-400 mx-auto" /><h2 className="mt-4 text-2xl font-bold">Access denied</h2></div>;
-    return <div className="px-4 py-6 space-y-6">
-        <div className="flex justify-between"><div><h2 className="text-2xl font-bold text-white">Access control</h2><p className="text-sm text-slate-400">Manage allowed sign-up emails and approve devices from their secure link.</p></div><button aria-label="Refresh allowlist" onClick={() => void refresh()}><RefreshCw className={busy ? 'animate-spin' : ''} /></button></div>
-        {error && <p role="alert" className="text-red-300">{error}</p>}
-        <form onSubmit={add} className="flex gap-2"><input aria-label="Email address to allow" type="email" required value={email} onChange={event => setEmail(event.target.value)} className="flex-1 rounded-xl bg-slate-900 border border-slate-700 p-3 text-white" /><button aria-label="Add email to allowlist" disabled={busy} className="rounded-xl bg-primary-600 px-5"><Plus /></button></form>
-        <ul className="divide-y divide-slate-700">{allowlist.map(item => <li key={item.id} className="py-3 flex justify-between"><span>{item.email}</span><button aria-label={`Remove ${item.email} from allowlist`} disabled={busy || item.email.trim().toLowerCase() === ADMIN_EMAIL} onClick={() => setRemoveTarget(item)}><Trash2 className="w-4 h-4 text-red-400" /></button></li>)}</ul>
-        <MigrationPanel />
-        <LegacyReversion />
-        <dialog ref={removeDialog} role="dialog" aria-labelledby="remove-member-title" className="z-50 bg-slate-800 border border-slate-700 p-6 rounded-2xl shadow-xl max-w-lg w-[calc(100%-2rem)] text-white [&::backdrop]:bg-black/60 [&::backdrop]:backdrop-blur-sm">
-            <h3 id="remove-member-title" className="text-lg font-semibold">Remove {removeTarget?.email}</h3>
-            <p className="mt-2 text-sm text-slate-300">This revokes the member’s devices, recovery keys, and active account sessions. It cannot erase quote data they already copied.</p>
-            <p className="mt-2 text-sm text-amber-200">Encryption rotation also rejects their older offline changes and starts the staged backup, device coverage, and activation workflow.</p>
-            <div className="mt-6 flex flex-wrap justify-end gap-3"><button ref={cancelRemove} type="button" onClick={() => setRemoveTarget(null)} disabled={busy} className="px-4 py-2 text-sm text-slate-300">Cancel</button><button type="button" onClick={() => void remove(false)} disabled={busy} className="rounded-lg border border-red-500/30 px-4 py-2 text-sm text-red-300">Remove access</button><button type="button" onClick={() => void remove(true)} disabled={busy || envelopeStatus !== 'active' || !deviceApproved || !encryptionKey} className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium disabled:opacity-50">Remove and rotate encryption</button></div>
-        </dialog>
-    </div>;
-};
 
-function MigrationPanel() {
-    const { user, canSync } = useAuth();
-    const cryptoContext = useCrypto();
-    const { encryptionKey, vaultGeneration, legacyVaultGeneration, deviceId, deviceApproved, getDeviceAuthorization } = cryptoContext;
-    const sourceGeneration = legacyVaultGeneration ?? vaultGeneration;
-    const [exported, setExported] = useState(false), [snapshot, setSnapshot] = useState<{ revision: number; quotes: import('../types').Quote[] } | null>(null), [pending, setPending] = useState<Awaited<ReturnType<typeof getPendingEnvelopeMigration>> | null>(null), [coverage, setCoverage] = useState<EnvelopeMigrationCoverage | null>(null), [confirmActivation, setConfirmActivation] = useState(false);
-    const [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [error, setError] = useState('');
-    const visible = cryptoContext.envelopeStatus === 'legacy' || cryptoContext.envelopeStatus === 'preparing' || cryptoContext.envelopeStatus === 'maintenance';
-    useEffect(() => { if (!visible || !sourceGeneration) return; void (async () => { try { const auth = deviceApproved && deviceId ? await getDeviceAuthorization() : null; const next = await getPendingEnvelopeMigration(auth?.deviceId ?? null, auth?.token ?? null); setPending(next); if (next.migrationId && auth) setCoverage(await getEnvelopeMigrationCoverage(next.migrationId, auth.deviceId, auth.token)); } catch (cause) { setError(getErrorMessage(cause, 'Could not load migration status.')); } })(); }, [deviceApproved, deviceId, getDeviceAuthorization, sourceGeneration, visible]);
-    if (!visible || !sourceGeneration || !encryptionKey || !user) return null;
-    const downloadBackup = async () => { setBusy(true); setError(''); try { const auth = deviceApproved && deviceId ? await getDeviceAuthorization() : null; const next = await loadMigrationSourceSnapshot({ sourceGeneration, deviceId: auth?.deviceId, token: auth?.token }); const file = await createEncryptedMigrationExport({ generation: sourceGeneration, revision: next.revision, quotes: next.quotes, key: encryptionKey }); const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([file], { type: 'application/json' })); link.download = `quotevault-encrypted-migration-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(link.href); setSnapshot(next); setExported(true); setMessage('Encrypted backup downloaded. Keep it until activation is verified.'); } catch (cause) { setError(getErrorMessage(cause, 'Could not create the encrypted backup.')); } finally { setBusy(false); } };
-    const prepare = async () => { if (!snapshot) return; setBusy(true); setError(''); let prepared = false; const key = crypto.getRandomValues(new Uint8Array(32)); try { const result = await prepareEnvelopeMigration({ sourceGeneration, sourceRevision: snapshot.revision, sourceKey: encryptionKey, sourceQuotes: snapshot.quotes, targetMasterKey: key, actorId: user.id, encryptedExportConfirmed: exported }); cryptoContext.setPreparedTargetMasterKey(result.targetGeneration, key); prepared = true; setPending({ migrationId: result.migrationId, status: 'prepared', sourceGeneration, targetGeneration: result.targetGeneration, sourceRevision: result.sourceRevision, expectedQuoteCount: result.quoteCount, stagedQuoteCount: 0 }); await cryptoContext.refreshVaultState(); setMessage('Migration prepared. Complete target device approval in this tab before staging.'); } catch (cause) { if (!prepared) cryptoContext.clearPreparedTargetMasterKey(); setError(getErrorMessage(cause, prepared ? 'Migration was prepared, but vault status refresh failed. Retry the status refresh or cancel preparation.' : 'Migration preparation failed.')); } finally { key.fill(0); setBusy(false); } };
-    const stage = async () => { if (!pending?.migrationId || !deviceApproved || !deviceId) return; setBusy(true); setError(''); let key: Uint8Array | null = null; try { const auth = await getDeviceAuthorization(); const targetGeneration = pending.targetGeneration; if (!targetGeneration) throw new Error('Migration target generation is not available yet.'); key = await cryptoContext.getApprovedTargetMasterKey(targetGeneration); const devices = coverage?.members.flatMap(member => member.devices.filter(device => !device.wrapperStaged).map(device => ({ id: device.deviceId, publicJwk: device.publicJwk, publicKeyFingerprint: device.publicKeyFingerprint, attestation: device.attestation }))) ?? []; const recoveries = coverage?.members.flatMap(member => member.recoveryKeys.filter(keyItem => !keyItem.wrapperStaged).map(keyItem => ({ id: keyItem.recoveryKeyId, publicJwk: keyItem.publicJwk, publicKeyFingerprint: keyItem.publicKeyFingerprint, attestation: keyItem.attestation }))) ?? []; const result = await runEnvelopeMigration({ sourceGeneration, sourceRevision: snapshot?.revision, sourceQuotes: snapshot?.quotes, sourceKey: encryptionKey, targetGeneration, targetMasterKey: key, migrationId: pending.migrationId, deviceId: auth.deviceId, token: auth.token, actorId: user.id, deviceWrappers: devices, recoveryWrappers: recoveries, encryptedExportConfirmed: exported, onProgress: next => setMessage(`${next.state}: ${next.stagedQuoteCount}/${next.expectedQuoteCount} staged`) }); if (!(result.status === 'staging' && result.stagedQuoteCount === 0)) { cryptoContext.clearPreparedTargetMasterKey(targetGeneration); const fetched = await cryptoContext.getApprovedTargetMasterKey(targetGeneration); fetched.fill(0); } setMessage(result.status === 'staging' && result.stagedQuoteCount === 0 ? 'Source snapshot refreshed. Let every approved device sync, then refresh readiness.' : `Migration ${result.status}. Review device coverage before activation.`); setPending(current => current && { ...current, sourceRevision: snapshot?.revision ?? current.sourceRevision, expectedQuoteCount: snapshot?.quotes.length ?? current.expectedQuoteCount, stagedQuoteCount: result.stagedQuoteCount, status: result.status }); setCoverage(await getEnvelopeMigrationCoverage(result.migrationId, auth.deviceId, auth.token)); } catch (cause) { setError(getErrorMessage(cause, 'Migration staging failed. Download a fresh backup if quotes changed.')); } finally { key?.fill(0); setBusy(false); } };
-    const activate = async () => { if (!pending?.migrationId || !deviceApproved || !deviceId) return; if (!confirmActivation || !coverage || !coverage.ready || coverage.stagedQuoteCount !== coverage.expectedQuoteCount || coverage.members.some(member => member.blockers.length > 0)) { setError('Resolve every device blocker and confirm readiness before activation.'); return; } setBusy(true); setError(''); let rolledBack = false; let key: Uint8Array | null = null; try { const auth = await getDeviceAuthorization(); const targetGeneration = pending.targetGeneration; if (!targetGeneration) throw new Error('Migration target generation is not available yet.'); key = await cryptoContext.getApprovedTargetMasterKey(targetGeneration); const result = await activateEnvelopeMigration({ sourceGeneration, sourceRevision: snapshot?.revision, sourceQuotes: snapshot?.quotes, sourceKey: encryptionKey, targetGeneration, targetMasterKey: key, migrationId: pending.migrationId, deviceId: auth.deviceId, token: auth.token, actorId: user.id, encryptedExportConfirmed: exported, onProgress: next => { rolledBack ||= next.state === 'rolled-back'; setMessage(`${next.state}: ${next.verifiedQuoteCount}/${next.expectedQuoteCount} verified`); } }); cryptoContext.clearPreparedTargetMasterKey(targetGeneration); await cryptoContext.refreshVaultState(); setMessage(`Migration finalized at generation ${result.targetGeneration}.`); setPending(null); } catch (cause) { if (rolledBack) { cryptoContext.clearPreparedTargetMasterKey(); setPending(null); try { await cryptoContext.refreshVaultState(); } catch { /* The rollback succeeded; the next refresh can restore its state. */ } } setError(getErrorMessage(cause, 'Migration activation failed.')); } finally { key?.fill(0); setBusy(false); } };
-    const refreshCoverage = async () => { if (!pending?.migrationId || !deviceId) return; setBusy(true); try { const auth = await getDeviceAuthorization(); setCoverage(await getEnvelopeMigrationCoverage(pending.migrationId, auth.deviceId, auth.token)); } catch (cause) { setError(getErrorMessage(cause, 'Could not refresh migration readiness.')); } finally { setBusy(false); } };
-    const rollback = async () => { if (!pending?.migrationId || !deviceId) return; setBusy(true); setError(''); try { const auth = await getDeviceAuthorization(); await rollbackEnvelopeMigration(pending.migrationId, auth.deviceId, auth.token); await cryptoContext.refreshVaultState(); } catch (cause) { setError(getErrorMessage(cause, 'Could not roll back the interrupted activation.')); } finally { setBusy(false); } };
-    const cancel = async () => { if (!pending?.migrationId) return; setBusy(true); setError(''); try { const auth = deviceApproved && deviceId ? await getDeviceAuthorization() : null; await abandonEnvelopeMigration(pending.migrationId, auth?.deviceId ?? null, auth?.token ?? null); cryptoContext.clearPreparedTargetMasterKey(); setPending(null); setCoverage(null); await cryptoContext.refreshVaultState(); } catch (cause) { setError(getErrorMessage(cause, 'Could not cancel migration preparation.')); } finally { setBusy(false); } };
-    const refreshVaultStatus = async () => { setBusy(true); setError(''); try { await cryptoContext.refreshVaultState(); } catch (cause) { setError(getErrorMessage(cause, 'Could not refresh vault status.')); } finally { setBusy(false); } };
-    if (cryptoContext.envelopeStatus === 'maintenance') return <section className="rounded-2xl border border-red-500/40 bg-red-500/5 p-5 space-y-4"><h3 className="text-lg font-semibold text-white">Vault activation interrupted</h3><p className="text-sm text-slate-300">The vault is in maintenance after an interrupted verification. Roll back to the retained encrypted quotes before retrying.</p>{error && <p role="alert" className="text-sm text-red-300">{error}</p>}<button type="button" onClick={() => void rollback()} disabled={busy || !pending?.migrationId || !deviceId} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-medium disabled:opacity-50">Roll back interrupted activation</button></section>;
-    const blocked = !coverage || coverage.members.some(member => member.blockers.length > 0);
-    return <section className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-5 space-y-4" aria-labelledby="migration-heading">
-        <div><h3 id="migration-heading" className="text-lg font-semibold text-white">Encrypted vault migration</h3><p className="mt-1 text-sm text-slate-300">Download an encrypted snapshot, prepare secure devices, stage the exact snapshot in batches, review coverage, then activate explicitly.</p></div>
-        <p className="text-sm text-amber-200">Keep the encrypted backup until verification completes. It contains ciphertext only; never upload it or share the vault key.</p>
-        {error && <p role="alert" className="text-sm text-red-300">{error}</p>}{message && <p role="status" className="text-sm text-slate-200">{message}</p>}
-        <div className="flex flex-wrap gap-3">
-            <button type="button" onClick={() => void downloadBackup()} disabled={busy || !canSync} className="inline-flex items-center gap-2 rounded-xl border border-slate-600 px-4 py-2 text-sm disabled:opacity-50"><Download className="h-4 w-4" />Download encrypted backup</button>
-            <button type="button" onClick={() => void prepare()} disabled={busy || !exported || !snapshot || !!pending?.migrationId} className="rounded-xl bg-slate-700 px-4 py-2 text-sm font-medium disabled:opacity-50">Prepare secure devices</button>
-            <button type="button" onClick={() => void refreshVaultStatus()} disabled={busy || !pending?.migrationId} className="rounded-xl border border-slate-600 px-4 py-2 text-sm disabled:opacity-50">Refresh vault status</button>
-            <button type="button" onClick={() => void refreshCoverage()} disabled={busy || !pending?.migrationId || !deviceApproved || !deviceId} className="rounded-xl border border-slate-600 px-4 py-2 text-sm disabled:opacity-50">Refresh readiness</button>
-            <button type="button" onClick={() => void stage()} disabled={busy || !exported || !pending?.migrationId || !deviceApproved || !deviceId || !coverage} className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-medium disabled:opacity-50">Stage exact snapshot</button>
-            <button type="button" onClick={() => void activate()} disabled={busy || !deviceApproved || !pending?.migrationId || !coverage?.ready || coverage.stagedQuoteCount !== coverage.expectedQuoteCount || blocked || !confirmActivation} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-medium disabled:opacity-50">Activate after review</button>
-            {pending?.migrationId && <button type="button" onClick={() => void cancel()} disabled={busy} className="rounded-xl border border-red-800 px-4 py-2 text-sm text-red-300 disabled:opacity-50">Cancel preparation</button>}
+    useEffect(() => {
+        // This loads server state asynchronously when the administrator mounts this view.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        if (isAdmin) void fetchAllowlist();
+    }, [isAdmin]);
+
+    const handleAddEmail = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!newEmail.trim()) return;
+        setIsAdding(true);
+        setErrorMsg('');
+
+        try {
+            const { error } = await supabase.from('allowlist').insert([{ email: newEmail.trim().toLowerCase() }]);
+            if (error) throw error;
+            setNewEmail('');
+            await fetchAllowlist();
+        } catch (error: unknown) {
+            setErrorMsg(getErrorMessage(error, 'Failed to add email'));
+        } finally {
+            setIsAdding(false);
+        }
+    };
+
+    const handleRemoveEmail = async (id: string, email: string) => {
+        if (removingId || email.trim().toLowerCase() === ADMIN_EMAIL) return;
+        setRemovingId(id);
+        setErrorMsg('');
+        try {
+            const { error } = await supabase.from('allowlist').delete().eq('id', id);
+            if (error) throw error;
+            setAllowlist(prev => prev.filter(item => item.id !== id));
+        } catch (error: unknown) {
+            setErrorMsg(getErrorMessage(error, 'Failed to remove email'));
+        } finally {
+            setRemovingId(null);
+        }
+    };
+
+    const handleWipeAndChangeKey = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (isWiping || !vaultGeneration || !user || !isAdmin) return;
+        if (vaultConfirm !== 'ERASE EVERYTHING') {
+            setWipeErrorMsg('You must type exactly "ERASE EVERYTHING" to confirm.');
+            return;
+        }
+        if (vaultKey.length < 12) {
+            setWipeErrorMsg('New Vault Key must be at least 12 characters.');
+            return;
+        }
+
+        setIsWiping(true);
+        setWipeErrorMsg('');
+
+        try {
+            const config = await createVaultConfig(vaultKey);
+            const { data, error: resetError } = await supabase.rpc('rotate_vault', {
+                p_expected_generation: vaultGeneration, p_kdf: config.kdf, p_verifier: config.verifier,
+            });
+            if (resetError) throw new Error(resetError.message);
+            cacheVaultState(user.id, parseVaultState(data));
+            lockVault();
+            await clearLocalSyncState();
+            setVaultKey('');
+            setVaultConfirm('');
+        } catch (error: unknown) {
+            setWipeErrorMsg(getErrorMessage(error, 'Failed to change Vault Key. Reconnect before retrying.'));
+        } finally {
+            setIsWiping(false);
+        }
+    };
+
+    // Strict access control check
+    if (!isAdmin) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-[50vh] text-center p-6 space-y-4">
+                <ShieldAlert className="w-16 h-16 text-red-500" />
+                <h2 className="text-2xl font-bold text-white">Access Denied</h2>
+                <p className="text-slate-400">You do not have administrative privileges to view this page.</p>
+            </div>
+        );
+    }
+
+    return (
+        <div className="px-4 py-6 space-y-6">
+            <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                    <div className="p-3 bg-primary-500/10 rounded-xl">
+                        <Users className="w-6 h-6 text-primary-400" />
+                    </div>
+                    <div>
+                        <h2 className="text-2xl font-bold text-white">Access Control</h2>
+                        <p className="text-sm text-slate-400">Manage allowed sign-up emails</p>
+                    </div>
+                </div>
+                <button
+                    aria-label="Refresh allowlist"
+                    onClick={() => { setLoading(true); void fetchAllowlist(); }}
+                    className="p-3 bg-slate-800/50 border border-slate-700/50 rounded-xl text-slate-300 hover:text-white transition-colors"
+                >
+                    <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+                </button>
+            </div>
+
+            {errorMsg && (
+                <div role="alert" className="p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm">
+                    {errorMsg}
+                </div>
+            )}
+
+            {/* Add Form */}
+            <form onSubmit={handleAddEmail} className="bg-surface p-5 rounded-2xl border border-slate-700/50 flex space-x-3">
+                <input
+                    aria-label="Email address to allow"
+                    type="email"
+                    required
+                    value={newEmail}
+                    onChange={(e) => setNewEmail(e.target.value)}
+                    placeholder="friend@example.com"
+                    className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded-xl py-3 px-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all"
+                />
+                <button
+                    aria-label="Add email to allowlist"
+                    type="submit"
+                    disabled={isAdding}
+                    className="bg-primary-600 hover:bg-primary-500 disabled:opacity-50 px-6 rounded-xl flex items-center justify-center text-white font-medium transition-colors"
+                >
+                    {isAdding ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
+                </button>
+            </form>
+
+            {/* Allowlist Grid */}
+            <div className="bg-surface rounded-2xl border border-slate-700/50 overflow-hidden">
+                <div className="p-4 bg-slate-800/50 border-b border-slate-700/50 font-medium text-slate-300">
+                    Allowed Emails ({allowlist.length})
+                </div>
+                {loading ? (
+                    <div className="p-10 flex justify-center">
+                        <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+                    </div>
+                ) : (
+                    <ul className="divide-y divide-slate-700/50">
+                        {allowlist.map((item) => (
+                                <li
+                                    key={item.id}
+                                    className="p-4 flex items-center justify-between hover:bg-slate-800/30 transition-colors"
+                                >
+                                    <span className="text-slate-200">{item.email}</span>
+                                    <button
+                                        aria-label={`Remove ${item.email} from allowlist`}
+                                        onClick={() => void handleRemoveEmail(item.id, item.email)}
+                                        disabled={removingId !== null || item.email.trim().toLowerCase() === ADMIN_EMAIL}
+                                        title={item.email.trim().toLowerCase() === ADMIN_EMAIL ? 'The configured administrator cannot be removed' : undefined}
+                                        className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition-colors"
+                                    >
+                                        {removingId === item.id ? <Loader2 aria-hidden="true" className="w-4 h-4 animate-spin" /> : <Trash2 aria-hidden="true" className="w-4 h-4" />}
+                                    </button>
+                                </li>
+                            ))}
+                            {allowlist.length === 0 && (
+                                <li className="p-8 text-center text-slate-500">
+                                    No emails on the allowlist yet. Everyone will be blocked from signing up.
+                                </li>
+                            )}
+                    </ul>
+                )}
+            </div>
+
+            {/* Danger Zone */}
+            <div className="mt-12 bg-red-950/20 border border-red-900/50 rounded-2xl p-6 space-y-4">
+                <div className="flex items-center space-x-3 mb-2">
+                    <div className="p-3 bg-red-500/10 rounded-xl">
+                        <AlertTriangle className="w-6 h-6 text-red-400" />
+                    </div>
+                    <div>
+                        <h2 className="text-xl font-bold text-red-400">Danger Zone: Vault Key Rotation</h2>
+                        <p className="text-sm text-red-300/70">Wipe all existing quotes and change the group's key</p>
+                    </div>
+                </div>
+
+                {wipeErrorMsg && (
+                    <div className="p-4 bg-red-500/20 border border-red-500/30 text-red-300 rounded-xl text-sm">
+                        {wipeErrorMsg}
+                    </div>
+                )}
+
+                <form onSubmit={handleWipeAndChangeKey} className="space-y-4 mt-4">
+                    <p className="text-sm text-slate-300 leading-relaxed mb-4">
+                        <strong className="text-white">WARNING:</strong> Changing the Group Vault Key will
+                        <span className="text-red-400 font-bold"> PERMANENTLY ERASE </span>
+                        all quotes for all users in the database. This action cannot be undone. Everyone will be forced to use the new key hereafter.
+                    </p>
+
+                    <div>
+                        <label htmlFor="new-vault-key" className="block text-xs text-slate-400 mb-1 uppercase tracking-wider font-semibold">New Group Vault Key</label>
+                        <input
+                            id="new-vault-key"
+                            type="password"
+                            minLength={12}
+                            autoComplete="new-password"
+                            required
+                            value={vaultKey}
+                            onChange={(e) => setVaultKey(e.target.value)}
+                            placeholder="Enter the new secure passcode"
+                            className="w-full bg-slate-900/50 border border-slate-700/50 rounded-xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-red-500/50 transition-all font-mono"
+                        />
+                    </div>
+
+                    <div>
+                        <label htmlFor="confirm-vault-reset" className="block text-xs text-slate-400 mb-1 uppercase tracking-wider font-semibold">Confirm Action</label>
+                        <input
+                            id="confirm-vault-reset"
+                            type="text"
+                            required
+                            value={vaultConfirm}
+                            onChange={(e) => setVaultConfirm(e.target.value)}
+                            placeholder='Type "ERASE EVERYTHING" to confirm'
+                            className="w-full bg-slate-900/50 border border-red-900/50 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-red-500/50 transition-all"
+                        />
+                    </div>
+
+                    <button
+                        type="submit"
+                        disabled={isWiping || vaultConfirm !== 'ERASE EVERYTHING'}
+                        className="w-full bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:bg-slate-800 disabled:text-slate-500 text-white font-medium py-3 rounded-xl transition-all flex items-center justify-center space-x-2 mt-4"
+                    >
+                        {isWiping ? (
+                            <Loader2 className="w-5 h-5 animate-spin" />
+                        ) : (
+                            <span>Wipe Database & Change Key</span>
+                        )}
+                    </button>
+                </form>
+            </div>
         </div>
-        {coverage && <ul className="text-xs text-slate-300 space-y-1">{coverage.members.map(member => <li key={member.memberId ?? member.email ?? 'allowlist-entry'}>{member.email ?? 'Allowlisted member'}: {member.blockers.length ? member.blockers.join(', ') : 'ready'}</li>)}</ul>}
-        <label className="flex items-start gap-2 text-xs text-slate-400"><input type="checkbox" checked={exported} onChange={event => setExported(event.target.checked)} disabled={busy} />I downloaded and retained the encrypted backup.</label>
-        <label className="flex items-start gap-2 text-xs text-slate-400"><input type="checkbox" checked={confirmActivation} onChange={event => setConfirmActivation(event.target.checked)} disabled={busy} />I reviewed device coverage and authorize vault activation.</label>
-    </section>;
-}
+    );
+};

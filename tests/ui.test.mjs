@@ -6,12 +6,9 @@ const load = (path, dependencies, globals) => loadModule(path, dependencies, {
   console: { error() {} }, ...globals,
 });
 
-const cryptoModule = load('src/lib/crypto.ts', {}, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob, console });
-const deviceCrypto = load('src/lib/device-crypto.ts', { './crypto': cryptoModule }, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob });
-const quoteCrypto = load('src/lib/quote-crypto.ts', { './crypto': cryptoModule, './device-crypto': deviceCrypto }, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob });
 const ui = load('src/components/ui.ts', {
   react: { useEffect: () => {}, useRef: initial => ({ current: initial }) },
-  '../lib/quote-crypto': { decryptQuoteRecord: async () => ({ text: 'decoded', author: 'Ada', context: 'letter', source_sender: 'Grace', id: 'evil', user_id: 'evil', sync_status: 'synced', extra: 'ignored' }) },
+  '../lib/crypto': { decryptData: async () => JSON.stringify({ text: 'decoded', author: 'Ada', context: 'letter', source_sender: 'Grace', id: 'evil', user_id: 'evil', sync_status: 'synced', extra: 'ignored' }) },
 });
 
 const previousTimezone = process.env.TZ;
@@ -42,7 +39,7 @@ assert.equal(decrypted.sync_status, 'pending');
 
 const invalidPayloadUi = load('src/components/ui.ts', {
   react: { useEffect: () => {}, useRef: initial => ({ current: initial }) },
-  '../lib/quote-crypto': { decryptQuoteRecord: async () => ({ text: 'decoded', author: 'Ada', source_sender: 42 }) },
+  '../lib/crypto': { decryptData: async () => JSON.stringify({ text: 'decoded', author: 'Ada', source_sender: 42 }) },
 });
 const failedDecrypt = await invalidPayloadUi.decryptQuoteForDisplay({
   id: 'q2', text: '$$E2E$${"iv":"iv","data":"data"}', author: 'ENCRYPTED', source_sender: 'spoofed',
@@ -51,20 +48,22 @@ const failedDecrypt = await invalidPayloadUi.decryptQuoteForDisplay({
 assert.equal(failedDecrypt.text, '🔒 Encrypted Payload (Decryption Failed)');
 assert.equal('source_sender' in failedDecrypt, false, 'failed decrypts must not expose top-level provenance');
 
+const cryptoModule = load('src/lib/crypto.ts', {}, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob, console });
 const encryptedUi = load('src/components/ui.ts', {
   react: { useEffect: () => {}, useRef: initial => ({ current: initial }) },
-  '../lib/quote-crypto': quoteCrypto,
+  '../lib/crypto': { decryptData: cryptoModule.decryptData },
 });
 const encryptionKey = await cryptoModule.deriveEncryptionKey('test-only-password');
-const encryptedQuote = await quoteCrypto.encryptQuoteRecord({ text: 'decoded', author: 'Ada', source_sender: 'Grace' }, {
-  id: 'q3', created_at: '2026-09-20T12:00:00Z', user_id: 'user-a', vault_generation: 'g1', quote_date: null,
+const encryptedBundle = await cryptoModule.encryptData(JSON.stringify({ text: 'decoded', author: 'Ada', source_sender: 'Grace' }), encryptionKey);
+const roundTrip = await encryptedUi.decryptQuoteForDisplay({
+  id: 'q3', text: `$$E2E$$${JSON.stringify(encryptedBundle)}`, author: 'ENCRYPTED', source_sender: 'spoofed',
+  created_at: '2026-09-20T12:00:00Z', user_id: 'user-a', vault_generation: 'g1',
 }, encryptionKey);
-const roundTrip = await encryptedUi.decryptQuoteForDisplay(encryptedQuote, encryptionKey);
 assert.equal(roundTrip.source_sender, 'Grace');
 assert.equal(roundTrip.text, 'decoded');
 assert.equal(roundTrip.author, 'Ada');
 assert.equal(roundTrip.context, undefined, 'payloads without context remain valid');
-assert.equal(JSON.stringify(encryptedQuote).includes('Grace'), false, 'source sender stays inside ciphertext');
+assert.equal(JSON.stringify(encryptedBundle).includes('Grace'), false, 'source sender stays inside ciphertext');
 
 const legacyBundle = await cryptoModule.encryptData(JSON.stringify({ text: 'legacy', author: 'Ada' }), encryptionKey);
 const legacyRoundTrip = await encryptedUi.decryptQuoteForDisplay({
@@ -85,6 +84,7 @@ const components = load('src/components/AddQuote.tsx', {
   '../hooks/useQuotes': { useQuotes: () => ({ addQuote: async () => {} }) },
   '../hooks/useAuth': { useAuth: () => ({ user: {id: 'user-a', user_metadata: {first_name: 'Grace'}} }) },
   '../hooks/useCrypto': { useCrypto: () => ({ encryptionKey: {}, isLocked: false }) },
+  '../lib/crypto': { encryptData: async () => ({}) },
   '../lib/profile-cache': { loadProfiles: async () => [] },
   '../lib/quote-edit': { saveQuoteEdit: async () => {} },
   '../lib/access': { isAdminUser: () => false },
@@ -125,6 +125,7 @@ async function renderWithProfiles(edit) {
     '../hooks/useQuotes': { useQuotes: () => ({ addQuote: async () => {} }) },
     '../hooks/useAuth': { useAuth: () => ({ user: { id: 'user-a' } }) },
     '../hooks/useCrypto': { useCrypto: () => ({ encryptionKey: {}, isLocked: false }) },
+    '../lib/crypto': { encryptData: async () => ({}) },
     '../lib/profile-cache': { loadProfiles: async () => profiles },
     '../lib/quote-edit': { saveQuoteEdit: async () => {} },
     '../lib/access': { isAdminUser: () => false },
@@ -153,6 +154,7 @@ assert.equal(importedAuthor.states[1], 'Mystery & Outside Speaker & Ada Lovelace
 find(importedTree, node => node.type === 'input' && node.props.type === 'checkbox' && node.props.checked === true).props.onChange({ target: { checked: false } });
 assert.equal(importedAuthor.states[1], 'Mystery & Outside Speaker');
 
+const encryptedInputs = [];
 const submittedQuotes = [];
 let addQuoteState = 0;
 const submitComponents = load('src/components/AddQuote.tsx', {
@@ -166,6 +168,7 @@ const submitComponents = load('src/components/AddQuote.tsx', {
   '../hooks/useQuotes': { useQuotes: () => ({ addQuote: async (...quote) => { submittedQuotes.push(quote); } }) },
   '../hooks/useAuth': { useAuth: () => ({ user: {id: 'user-a', user_metadata: {first_name: 'Grace'}} }) },
   '../hooks/useCrypto': { useCrypto: () => ({ encryptionKey: {}, isLocked: false }) },
+  '../lib/crypto': { encryptData: async plaintext => { encryptedInputs.push(plaintext); return { iv: 'iv', data: 'data' }; } },
   '../lib/profile-cache': { loadProfiles: async () => [] },
   '../lib/quote-edit': { saveQuoteEdit: async () => {} },
   '../lib/access': { isAdminUser: () => false },
@@ -173,7 +176,8 @@ const submitComponents = load('src/components/AddQuote.tsx', {
 });
 const submitTree = submitComponents.AddQuote({ onClose: () => {} });
 await find(submitTree, node => node.type === 'form').props.onSubmit({ preventDefault() {} });
-assert.equal(JSON.stringify(submittedQuotes), JSON.stringify([[{ text: 'quote', author: 'Ada', context: 'note', source_sender: 'Grace' }, ui.localDateInputValue()]]));
+assert.deepEqual(encryptedInputs, ['{"text":"quote","author":"Ada","context":"note","source_sender":"Grace"}']);
+assert.deepEqual(submittedQuotes, [['$$E2E$${"iv":"iv","data":"data"}', 'ENCRYPTED', 'ENCRYPTED', ui.localDateInputValue()]]);
 
 const sessionDeferred = Promise.withResolvers();
 let authEvent;
@@ -201,7 +205,7 @@ const authModule = load('src/hooks/useAuth.tsx', {
   react: authReact,
   'react/jsx-runtime': { jsx: (type, props) => type(props) },
   '@supabase/supabase-js': { isAuthRetryableFetchError: () => false },
-  '../lib/vault': { readCachedVaultState: () => null, isLegacyVaultState: state => state?.envelope_status === 'legacy' || state?.envelope_status === 'preparing', clearCachedVaultState() {} },
+  '../lib/vault': { readCachedVaultState: () => null, clearCachedVaultState() {} },
   '../lib/supabase': {
     readCachedSessionUser: () => null, clearCachedSession() {}, isLocallySignedOut: () => false, setLocalSignedOut() {}, localSignOutKey: 'test-signout',
     supabase: {
@@ -226,33 +230,6 @@ assert.equal(authContext.value.user, newerUser, 'a stale session result cannot o
 assert.equal(authContext.value.loading, false, 'a newer auth event clears session loading');
 authCleanup?.();
 
-// Envelope clients need the cached signed-in identity to enter their device gate offline.
-let envelopeContext;
-const envelopeReact = {
-  createContext: initial => {
-    envelopeContext = { value: initial };
-    envelopeContext.Provider = ({ value }) => { envelopeContext.value = value; return null; };
-    return envelopeContext;
-  },
-  useContext: context => context.value,
-  useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
-  useRef: initial => ({ current: initial }),
-  useCallback: callback => callback,
-  useEffect() {},
-};
-const envelopeAuth = load('src/hooks/useAuth.tsx', {
-  react: envelopeReact,
-  'react/jsx-runtime': { jsx: (type, props) => type(props) },
-  '@supabase/supabase-js': { isAuthRetryableFetchError: () => false },
-  '../lib/vault': { readCachedVaultState: () => ({ envelope_status: 'active' }), isLegacyVaultState: state => state?.envelope_status === 'legacy' || state?.envelope_status === 'preparing', clearCachedVaultState() {} },
-  '../lib/supabase': {
-    readCachedSessionUser: () => ({ id: 'active-device-user' }), clearCachedSession() {}, isLocallySignedOut: () => false, setLocalSignedOut() {}, localSignOutKey: 'test-signout',
-    supabase: { auth: { getSession: async () => ({ data: { session: null }, error: null }), onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }) } },
-  },
-}, { navigator: { onLine: false }, document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} }, window: { addEventListener() {}, removeEventListener() {}, clearTimeout() {} } });
-envelopeAuth.AuthProvider({ children: null });
-assert.equal(envelopeContext.value.user?.id, 'active-device-user', 'cached active envelope state reaches the offline device gate');
-
 // A failed refresh must recover without needing a second browser online event.
 let recoverEffect;
 let recoverCalls = 0;
@@ -270,7 +247,7 @@ const recoverModule = load('src/hooks/useAuth.tsx', {
   react: { ...authReact, useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}], useEffect: effect => { recoverEffect = effect; } },
   'react/jsx-runtime': { jsx: (type, props) => type(props) },
   '@supabase/supabase-js': { isAuthRetryableFetchError: error => error?.name === 'AuthRetryableFetchError' },
-  '../lib/vault': { readCachedVaultState: () => ({ envelope_status: 'legacy', verifier: {} }), isLegacyVaultState: state => state?.envelope_status === 'legacy' || state?.envelope_status === 'preparing', clearCachedVaultState() {} },
+  '../lib/vault': { readCachedVaultState: () => ({ verifier: {} }), clearCachedVaultState() {} },
   '../lib/supabase': {
     readCachedSessionUser: () => ({ id: 'cached-user' }), clearCachedSession() {}, isLocallySignedOut: () => false, setLocalSignedOut() {}, localSignOutKey: 'test-signout',
     supabase: { auth: {
@@ -319,19 +296,3 @@ assert.deepEqual(await profileModule.loadProfiles('profile-user'), [{ id: 'fresh
 assert.equal(profileCalls, 2);
 
 console.log('ui audit checks passed');
-
-// Envelope quotes must stay behind one explicit state machine.  This is kept
-// pure so the same rule gates both the initial render and lease-expiry lock.
-const vaultGate = load('src/components/VaultGate.tsx', {
-  react: {},
-  'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
-  'lucide-react': { Lock: 'Lock', Loader2: 'Loader2' },
-});
-assert.equal(vaultGate.vaultGateState({ legacy: true, key: false }), 'legacy-locked');
-assert.equal(vaultGate.vaultGateState({ pending: true }), 'pending-approval');
-assert.equal(vaultGate.vaultGateState({ recovery: true }), 'recovery-setup');
-assert.equal(vaultGate.vaultGateState({ device: true, key: false }), 'device-locked');
-assert.equal(vaultGate.vaultGateState({ device: true, key: true, leaseValid: false }), 'lease-expired');
-assert.equal(vaultGate.vaultGateState({ device: true, key: false, leaseValid: false }), 'lease-expired', 'expiry remains visible after locking clears the quote key');
-assert.equal(vaultGate.vaultGateState({ device: true, key: true, leaseValid: true }), 'unlocked');
-assert.equal(vaultGate.vaultGateState({ device: true, key: true, leaseValid: true }) === 'unlocked', true, 'children render only after a verified lease derives the quote key');

@@ -46,13 +46,7 @@ function setup(reply = args => ({ generation: 'g1', revision: 1, results: args.p
     setTimeout(callback, delay) { timers.push({ callback, delay, cleared: false }); return timers.length - 1; },
     clearTimeout(id) { if (typeof id === 'number' && timers[id]) timers[id].cleared = true; }
   } : { setTimeout, clearTimeout };
-  const sync = load('src/lib/sync.ts', { './db': { db }, './supabase': { supabase }, './quote-crypto': {
-    decryptQuoteRecord: async stored => {
-      if (stored.failDecrypt) throw new Error('Incorrect vault key');
-      return stored.privatePayload ?? stored;
-    },
-    encryptQuoteRecord: async (privateFields, visibleFields) => ({ ...visibleFields, text: `$$E2E$$${JSON.stringify({ privateFields })}` }),
-  } }, { navigator, window: { addEventListener() {}, ...clock }, document: { addEventListener() {} } });
+  const sync = load('src/lib/sync.ts', { './db': { db }, './supabase': { supabase } }, { navigator, window: { addEventListener() {}, ...clock }, document: { addEventListener() {} } });
   return { db, sync, rpcCalls, rpcSignals, navigator };
 }
 
@@ -63,110 +57,6 @@ async function enqueue(db, sync, action, value, actor = 'u1', generation = 'g1')
   return operation;
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
-
-await (async () => {
-  const { db, sync } = setup();
-  const original = quote('convert-me', 'old-generation');
-  original.privatePayload = { ...original, text: 'private quote', author: 'Alice', context: 'private context', quote_date: '2026-09-21' };
-  await db.quotes.put(original);
-  const oldOperation = {
-    id: 'old-operation', operation_id: 'old-operation', action: 'INSERT', quote_id: original.id,
-    actor_id: 'u1', vault_generation: 'old-generation', payload: original,
-    created_at: original.created_at, status: 'blocked', error: 'Vault encryption changed.',
-  };
-  await db.syncQueue.put(oldOperation);
-  const acknowledgements = [];
-  const converted = await sync.convertQueuedOperations({
-    actorId: 'u1', generation: 'new-generation', currentKey: {},
-    getSourceKey: async generation => { assert.equal(generation, 'old-generation'); return {}; },
-    acknowledgeSource: async generation => acknowledgements.push(generation),
-  });
-  assert.equal(converted, 1, 'one old-generation operation is converted');
-  assert.equal(db.syncQueue.rows.has('old-operation'), false, 'the old operation is removed');
-  const next = [...db.syncQueue.rows.values()][0];
-  assert.equal(next.vault_generation, 'new-generation');
-  assert.equal(next.status, 'pending');
-  assert.equal(next.payload.author, 'ENCRYPTED');
-  assert.equal(next.payload.context, 'ENCRYPTED');
-  assert.equal(JSON.parse(next.payload.text.slice('$$E2E$$'.length)).privateFields.text, 'private quote', 'private payload survives conversion');
-  assert.deepEqual(acknowledgements, ['old-generation'], 'conversion wrapper is acknowledged after the source queue is empty');
-})();
-
-await (async () => {
-  const { db, sync } = setup();
-  const original = quote('ack-retry', 'old-generation');
-  original.privatePayload = { ...original, text: 'private quote', author: 'Alice', context: null };
-  await db.syncQueue.put({ id: 'ack-old', operation_id: 'ack-old', action: 'INSERT', quote_id: original.id,
-    actor_id: 'u1', vault_generation: 'old-generation', payload: original, created_at: original.created_at, status: 'blocked' });
-  let attempts = 0;
-  await assert.rejects(sync.convertQueuedOperations({ actorId: 'u1', generation: 'new-generation', currentKey: {},
-    getSourceKey: async () => ({}), acknowledgeSource: async () => { attempts++; if (attempts === 1) throw new Error('temporary acknowledgement failure'); } }), /temporary acknowledgement failure/);
-  assert.equal(db.syncQueue.rows.size, 1, 'acknowledgement failure leaves the converted operation retryable');
-  assert.equal(await sync.convertQueuedOperations({ actorId: 'u1', generation: 'new-generation', currentKey: {},
-    getSourceKey: async () => ({}), acknowledgeSource: async () => { attempts++; } }), 0, 'a retry only acknowledges already-converted work');
-  assert.equal(attempts, 2);
-})();
-
-await (async () => {
-  const { db, sync, rpcCalls } = setup();
-  const old = quote('direct-old', 'old-generation');
-  await db.syncQueue.put({ id: 'direct-old-op', operation_id: 'direct-old-op', action: 'INSERT', quote_id: old.id,
-    actor_id: 'u1', vault_generation: 'old-generation', payload: old, created_at: old.created_at, status: 'pending' });
-  await sync.processSyncQueue({ actorId: 'u1', generation: 'new-generation' });
-  assert.equal(rpcCalls[0].p_operations.length, 0, 'direct sync never submits an old-generation operation');
-  assert.equal(db.syncQueue.rows.has('direct-old-op'), true, 'old-generation work remains until explicit conversion');
-})();
-
-await (async () => {
-  const { db, sync } = setup();
-  const original = quote('atomic', 'old-generation');
-  original.privatePayload = { ...original, text: 'private quote', author: 'Alice', context: null };
-  const operation = { id: 'atomic-old', operation_id: 'atomic-old', action: 'INSERT', quote_id: original.id,
-    actor_id: 'u1', vault_generation: 'old-generation', payload: original, created_at: original.created_at, status: 'blocked' };
-  await db.syncQueue.put(operation);
-  await assert.rejects(sync.convertQueuedOperations({
-    actorId: 'u1', generation: 'new-generation', currentKey: {},
-    getSourceKey: async () => { await db.syncQueue.update('atomic-old', { error: 'changed elsewhere' }); return {}; },
-  }), /changed while it was being converted/);
-  assert.equal(db.syncQueue.rows.has('atomic-old'), true, 'a concurrent change preserves the old item');
-  assert.equal([...db.syncQueue.rows.values()].filter(item => item.vault_generation === 'new-generation').length, 0, 'a failed atomic replacement creates no new item');
-})();
-
-await (async () => {
-  const { db, sync } = setup();
-  const original = quote('cancel', 'old-generation');
-  original.privatePayload = { ...original, text: 'private quote', author: 'Alice', context: null };
-  await db.syncQueue.put({ id: 'cancel-old', operation_id: 'cancel-old', action: 'INSERT', quote_id: original.id,
-    actor_id: 'u1', vault_generation: 'old-generation', payload: original, created_at: original.created_at, status: 'blocked' });
-  await assert.rejects(sync.convertQueuedOperations({ actorId: 'u1', generation: 'new-generation', currentKey: {},
-    getSourceKey: async () => ({}), isActive: () => false }), /access changed/);
-  assert.equal(db.syncQueue.rows.has('cancel-old'), true, 'cancellation preserves the blocked legacy operation');
-})();
-
-await (async () => {
-  const { db, sync } = setup();
-  const original = quote('wrong-key', 'old-generation');
-  original.privatePayload = { ...original, text: 'private quote', author: 'Alice', context: null };
-  const operation = { id: 'wrong-key-old', operation_id: 'wrong-key-old', action: 'INSERT', quote_id: original.id,
-    actor_id: 'u1', vault_generation: 'old-generation', payload: original, created_at: original.created_at, status: 'blocked' };
-  await db.syncQueue.put(operation);
-  await assert.rejects(sync.convertQueuedOperations({
-    actorId: 'u1', generation: 'new-generation', currentKey: {},
-    getSourceKey: async () => { throw new Error('wrong old key'); },
-  }), /wrong old key/);
-  assert.equal(db.syncQueue.rows.has('wrong-key-old'), true, 'a failed source-key operation stays queued');
-  await db.syncQueue.delete('wrong-key-old');
-
-  const deleteQuote = quote('delete-convert', 'old-generation');
-  const deleteOperation = { id: 'delete-old', operation_id: 'delete-old', action: 'DELETE', quote_id: deleteQuote.id,
-    actor_id: 'u1', vault_generation: 'old-generation', created_at: original.created_at, status: 'blocked' };
-  await db.syncQueue.put(deleteOperation);
-  const count = await sync.convertQueuedOperations({ actorId: 'u1', generation: 'new-generation', currentKey: {}, getSourceKey: async () => ({}) });
-  assert.equal(count, 1);
-  const converted = [...db.syncQueue.rows.values()][0];
-  assert.equal(converted.action, 'DELETE');
-  assert.equal(converted.payload, undefined, 'converted deletes never gain a payload');
-})();
 
 function runProvider(db, { userId = 'u1', generation = 'g1', legacyGeneration = null, canSync = true, retry = async () => {} } = {}, { processSyncQueue = async () => {}, timers = [], visibilityState = 'visible', navigator = { onLine: true } } = {}) {
   const states = [];
@@ -186,17 +76,10 @@ function runProvider(db, { userId = 'u1', generation = 'g1', legacyGeneration = 
   const { QuotesProvider } = load('src/hooks/useQuotes.tsx', {
     react: React, 'react/jsx-runtime': { jsx: (type, props) => ({ type, props }) },
     'dexie-react-hooks': { useLiveQuery: (_query, _deps, fallback) => fallback },
-    '../lib/db': { db }, '../lib/sync': { cancelSyncRequests() {}, createSyncOperation(action, quote, actorId, vaultGeneration) {
-      return { id: 'manual-operation', operation_id: 'manual-operation', action, quote_id: quote.id, actor_id: actorId,
-        vault_generation: vaultGeneration, payload: action === 'INSERT' ? { ...quote } : undefined,
-        created_at: '2026-09-22T00:00:00.000Z', status: 'pending' };
-    }, enqueueDeleteMutation() {}, isTransientSyncFailure(error) { return error?.status === 503 || /failed to fetch/i.test(error?.message || ''); }, processSyncQueue },
-    '../lib/quote-crypto': { encryptQuoteRecord: async (privateFields, visibleFields) => ({ ...visibleFields, text: '$$E2E$${"version":2,"iv":"iv","data":"ciphertext"}' }) },
-    '../lib/vault': { LEGACY_CONVERSION_KEY_REQUIRED: 'Enter your previous group vault key once to convert older saved changes.' },
-    '../components/ui': { isCiphertextWithinLimit: () => true },
+    '../lib/db': { db }, '../lib/sync': { cancelSyncRequests() {}, createSyncOperation() {}, enqueueDeleteMutation() {}, isTransientSyncFailure(error) { return error?.status === 503 || /failed to fetch/i.test(error?.message || ''); }, processSyncQueue },
     '../lib/supabase': { supabase: { channel: () => ({ on() { return this; }, subscribe() { return { unsubscribe: async () => {} }; } }) } },
     './useAuth': { useAuth: () => ({ user: { id: userId }, canSync, retry }) },
-    './useCrypto': { useCrypto: () => ({ encryptionKey: {}, vaultGeneration: generation, legacyVaultGeneration: legacyGeneration, lockVault() {} }) },
+    './useCrypto': { useCrypto: () => ({ vaultGeneration: generation, legacyVaultGeneration: legacyGeneration, lockVault() {} }) },
   }, { navigator, window: { clearTimeout(id) { if (typeof id === 'number') timers[id] = undefined; }, setTimeout(callback, delay) { timers.push({ callback, delay }); return timers.length - 1; }, addEventListener() {}, removeEventListener() {} }, document: { addEventListener() {}, removeEventListener() {}, visibilityState }, crypto: webcrypto });
   const render = () => {
     cursor = 0;
@@ -204,24 +87,6 @@ function runProvider(db, { userId = 'u1', generation = 'g1', legacyGeneration = 
   };
   return { states, rendered: render(), render, cleanup: () => cleanups.splice(0).reverse().forEach(cleanup => cleanup()) };
 }
-
-await (async () => {
-  const db = { quotes: table(), syncQueue: table(), metadata: table(), transaction: async (_mode, ...args) => args.at(-1)() };
-  const provider = runProvider(db);
-  await settle();
-  const value = provider.render().props.value;
-  await value.addQuote({ text: 'manual plaintext', author: 'Ada', context: 'private context' }, '2026-09-22');
-  const stored = [...db.quotes.rows.values()][0];
-  const queued = [...db.syncQueue.rows.values()][0];
-  assert.equal(stored.author, 'ENCRYPTED', 'Dexie stores an opaque author placeholder');
-  assert.equal(stored.context, 'ENCRYPTED', 'Dexie stores an opaque context placeholder');
-  assert.equal(queued.payload.author, 'ENCRYPTED', 'queued INSERT stores an opaque author placeholder');
-  assert.equal(queued.payload.context, 'ENCRYPTED', 'queued INSERT stores an opaque context placeholder');
-  assert.equal(queued.action, 'INSERT', 'manual additions enqueue an INSERT operation');
-  assert.equal(queued.payload.text.startsWith('$$E2E$$'), true, 'queued INSERT carries ciphertext');
-  assert.equal(JSON.stringify(stored).includes('manual plaintext'), false, 'Dexie never stores quote plaintext');
-  assert.equal(JSON.stringify(queued).includes('manual plaintext'), false, 'queued INSERT never stores quote plaintext');
-})();
 
 await (async () => {
   const { db, sync, rpcCalls, rpcSignals } = setup();
@@ -236,50 +101,6 @@ await (async () => {
   assert.equal(db.syncQueue.rows.size, 1, 'a rejected operation persists without blocking acknowledged operations');
   assert.equal([...db.syncQueue.rows.values()][0].quote_id, 'bad');
   assert.equal([...db.syncQueue.rows.values()][0].error, 'denied');
-})();
-
-await (async () => {
-  const { db, sync, rpcCalls } = setup();
-  await enqueue(db, sync, 'INSERT', quote('authorized'));
-  let renewals = 0;
-  let authorizations = 0;
-  const queueReports = [];
-  await sync.processSyncQueue({
-    actorId: 'u1', generation: 'g1',
-    getDeviceAuthorization: async () => { authorizations++; return { deviceId: '11111111-1111-4111-8111-111111111111', token: 'transient-token' }; },
-    reportMigrationEmptyQueue: async revision => { assert.equal(db.syncQueue.rows.size, 0, 'queue report waits until acknowledged operations are removed'); queueReports.push(revision); },
-    renewLease: async () => { renewals++; },
-  });
-  assert.equal(rpcCalls[0].p_generation, 'g1');
-  assert.equal(rpcCalls[0].p_revision, null);
-  assert.equal(rpcCalls[0].p_device_id, '11111111-1111-4111-8111-111111111111');
-  assert.equal(rpcCalls[0].p_device_token, 'transient-token');
-  assert.deepEqual(Object.keys(rpcCalls[0]).sort(), ['p_device_id', 'p_device_token', 'p_generation', 'p_operations', 'p_revision'], 'sync sends exact transient device authorization arguments');
-  assert.equal(renewals, 1, 'successful sync renews the signed lease');
-  assert.deepEqual(queueReports, [1], 'successful empty queue reports the exact server revision once');
-  assert.equal(JSON.stringify(rpcCalls[0]).includes('manual plaintext'), false, 'sync arguments contain no quote plaintext');
-})();
-
-await (async () => {
-  const { sync, navigator } = setup();
-  let authorizations = 0;
-  navigator.onLine = false;
-  assert.equal(await sync.processSyncQueue({ actorId: 'u1', generation: 'g1', getDeviceAuthorization: async () => {
-    authorizations++; return { deviceId: '11111111-1111-4111-8111-111111111111', token: 'transient-token' };
-  } }), false);
-  assert.equal(authorizations, 0, 'offline sync never prompts for device authorization');
-})();
-
-await (async () => {
-  const { db, sync } = setup();
-  await enqueue(db, sync, 'INSERT', quote('bad'));
-  let reports = 0;
-  await sync.processSyncQueue({
-    actorId: 'u1', generation: 'g1',
-    getDeviceAuthorization: async () => ({ deviceId: '11111111-1111-4111-8111-111111111111', token: 'transient-token' }),
-    reportMigrationEmptyQueue: async () => { reports++; },
-  });
-  assert.equal(reports, 0, 'rejected local work blocks an empty-queue migration report');
 })();
 
 await (async () => {
@@ -392,26 +213,18 @@ await (async () => {
 
 await (async () => {
   const { db, sync } = setup(() => null);
-  let locked = false;
   await db.quotes.put(quote('safe'));
   await enqueue(db, sync, 'INSERT', quote('safe'));
-  await assert.rejects(sync.processSyncQueue({ actorId: 'u1', generation: 'g1', onGenerationMismatch: () => { locked = true; } }), /Device authorization was denied/);
-  assert.equal(locked, true, 'an authorization-null response refreshes vault state so cutover is discovered');
+  await assert.rejects(sync.processSyncQueue({ actorId: 'u1', generation: 'g1' }), /Invalid sync response/);
   assert.equal(db.quotes.rows.size, 1, 'a malformed response never clears local data');
   assert.equal(db.syncQueue.rows.size, 1, 'a malformed response never acknowledges queued work');
 })();
 
 await (async () => {
   const { db, sync, rpcCalls } = setup();
-  let renewals = 0;
-  let authorizations = 0;
   for (let index = 0; index < 51; index++) await enqueue(db, sync, 'INSERT', quote(`batch-${index}`));
-  await sync.processSyncQueue({ actorId: 'u1', generation: 'g1',
-    getDeviceAuthorization: async () => { authorizations++; return { deviceId: '11111111-1111-4111-8111-111111111111', token: 'transient-token' }; },
-    renewLease: async () => { renewals++; } });
+  await sync.processSyncQueue({ actorId: 'u1', generation: 'g1' });
   assert.deepEqual(rpcCalls.map(call => call.p_operations.length), [50, 1], 'the queue drains batches without sending more than 50 operations');
-  assert.equal(authorizations, 1, 'a multi-batch sync cycle obtains transient authorization once');
-  assert.equal(renewals, 1, 'a multi-batch sync cycle renews the lease once');
 })();
 
 await (async () => {
@@ -533,7 +346,7 @@ await (async () => {
   const entered = Promise.withResolvers();
   const release = Promise.withResolvers();
   let locked = false;
-  const { db, sync } = setup(args => ({ generation: 'g2', revision: 1, results: args.p_operations.map(op => ({ operation_id: op.operation_id, status: 'rejected', error: 'migration required' })), quotes: [] }));
+  const { db, sync } = setup(() => ({ generation: 'g2', revision: 1, results: [], quotes: [] }));
   await db.quotes.put(quote('new-session-cache'));
   db.transaction = async (_mode, ...args) => { entered.resolve(); await release.promise; return args.at(-1)(); };
   const running = sync.processSyncQueue({ actorId: 'u1', generation: 'g1', onGenerationMismatch: () => { locked = true; } });
@@ -543,16 +356,6 @@ await (async () => {
   await running;
   assert.equal(db.quotes.rows.has('new-session-cache'), true, 'stale generation cleanup cannot clear a newer session');
   assert.equal(locked, false, 'stale generation cleanup cannot lock a newer session');
-})();
-
-await (async () => {
-  let locked = false;
-  const { db, sync } = setup(args => ({ generation: 'g2', revision: 1, results: args.p_operations.map(op => ({ operation_id: op.operation_id, status: 'rejected', error: 'migration required' })), quotes: [] }));
-  const operation = await enqueue(db, sync, 'INSERT', quote('cutover-race'));
-  await sync.processSyncQueue({ actorId: 'u1', generation: 'g1', onGenerationMismatch: () => { locked = true; } });
-  assert.equal(locked, true);
-  assert.equal(db.syncQueue.rows.get(operation.id).status, 'blocked', 'cutover retains a newly queued old-generation change for conversion');
-  assert.match(db.syncQueue.rows.get(operation.id).error, /convert/i);
 })();
 
 await (async () => {
@@ -659,52 +462,6 @@ await (async () => {
   await provider.rendered.props.value.refresh();
   assert.equal(syncs, 0, 'offline refresh skips the remote sync');
   assert.match(provider.states[2], /Offline/, 'offline refresh explains that changes remain local');
-})();
-
-await (async () => {
-  const { sync, navigator } = setup();
-  let authorizations = 0;
-  navigator.locks = { request: (_name, run) => Promise.resolve().then(run) };
-  const running = sync.processSyncQueue({ actorId: 'u1', generation: 'g1', getDeviceAuthorization: async () => {
-    authorizations++; return { deviceId: '11111111-1111-4111-8111-111111111111', token: 'transient-token' };
-  } });
-  sync.cancelSyncRequests();
-  await running;
-  assert.equal(authorizations, 0, 'a sync cancelled while waiting for the cross-tab lock never requests device authorization');
-})();
-
-await (async () => {
-  const { db, sync } = setup(() => ({ generation: 'g2', revision: 7, results: [], quotes: [] }));
-  await db.quotes.put(quote('shared-cache'));
-  await db.metadata.put({ id: 'sync-revision:u1:g2', value: 7 });
-  await sync.processSyncQueue({ actorId: 'u1', generation: 'g1', onGenerationMismatch: () => {} });
-  assert.equal(db.quotes.rows.size, 0);
-  assert.equal(db.metadata.rows.has('sync-revision:u1:g2'), false, 'clearing the shared cache forces every tab to fetch a full snapshot');
-})();
-
-await (async () => {
-  const { db, sync } = setup();
-  const original = quote('rejected-old', 'old-generation');
-  original.privatePayload = { ...original, text: 'private quote', author: 'Alice', context: null };
-  await db.syncQueue.put({ id: 'rejected-old', operation_id: 'rejected-old', action: 'INSERT', quote_id: original.id,
-    actor_id: 'u1', vault_generation: 'old-generation', payload: original, created_at: original.created_at, status: 'rejected', error: 'denied' });
-  const acknowledgements = [];
-  assert.equal(await sync.convertQueuedOperations({ actorId: 'u1', generation: 'new-generation', currentKey: {},
-    getSourceKey: async () => ({}), acknowledgeSource: async generation => acknowledgements.push(generation) }), 1);
-  const next = [...db.syncQueue.rows.values()][0];
-  assert.equal(next.vault_generation, 'new-generation');
-  assert.equal(next.status, 'rejected', 'rejected older work stays visible as rejected in the current generation');
-  assert.equal(next.error, 'denied');
-  assert.deepEqual(acknowledgements, ['old-generation'], 'rejected older work no longer blocks the conversion acknowledgement');
-})();
-
-await (async () => {
-  const { db, sync } = setup();
-  const acknowledged = [];
-  assert.equal(await sync.acknowledgeEmptyConversion('u1', 'old-generation', async generation => { acknowledged.push(generation); }), true);
-  await enqueue(db, sync, 'INSERT', quote('still-old', 'old-generation'), 'u1', 'old-generation');
-  assert.equal(await sync.acknowledgeEmptyConversion('u1', 'old-generation', async generation => { acknowledged.push(generation); }), false);
-  assert.deepEqual(acknowledged, ['old-generation'], 'only an empty queue releases the conversion wrapper at unlock');
 })();
 
 console.log('sync queue regression tests passed');

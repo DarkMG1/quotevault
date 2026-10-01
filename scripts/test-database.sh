@@ -24,47 +24,26 @@ psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922000000_c
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-import.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922010000_admin_quote_edit.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-edit.sql
+# Device-envelope migrations were applied to production and later removed; prove the removal keeps every shared-key row and the shared-key client contract.
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922020000_envelope_foundation.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922030000_envelope_recovery.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922040000_recovery_device_transition.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922050000_recovery_binding_metadata.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-recovery.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922060000_device_bootstrap.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922070000_bootstrap_contract_hardening.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922080000_device_authorized_rpcs.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-auth.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922090000_device_authorized_rpc_fixes.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922100000_device_recovery_requirement.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922110000_bootstrap_state_rpc.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-auth-fixes.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-bootstrap.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922120000_envelope_migration.sql
-# Reapplication is intentional: this verifies additive migration idempotence.
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922120000_envelope_migration.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-migration.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922130000_envelope_rotation.sql
-# Reapplication is intentional: this verifies additive rotation migration idempotence.
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922130000_envelope_rotation.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-rotation.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922140000_audit_fixes.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922140000_audit_fixes.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-audit-fixes.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-legacy-client.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f scripts/quote-fingerprint.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260923000000_legacy_reversion.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260923000000_legacy_reversion.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-legacy-reversion.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f scripts/migration-status.sql
 psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20261001000000_recovery_replace_preparing.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20261001000000_recovery_replace_preparing.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-recovery-replace.sql
-psql -X -v ON_ERROR_STOP=1 -At -d "$test_db" -c "select p.proname||'|'||coalesce(array_to_string(p.proargnames[1:p.pronargs],','),'')||'|'||p.pronargdefaults from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and has_function_privilege('authenticated',p.oid,'execute')" | node tests/rpc-contract.mjs
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -c "do \$\$ begin if has_function_privilege('anon','public.begin_legacy_reversion(uuid,bigint,uuid,text)','execute') or has_function_privilege('anon','public.stage_legacy_reversion(uuid,jsonb,uuid,text)','execute') or has_function_privilege('anon','public.commit_legacy_reversion(uuid,jsonb,jsonb,uuid,text)','execute') or has_function_privilege('authenticated','public.qv_reversion_authorized(public.vault_state,uuid,text)','execute') or has_function_privilege('authenticated','public.qv_legacy_v1_text(text)','execute') or has_table_privilege('authenticated','public.vault_legacy_reversions','select,insert,update,delete') or has_table_privilege('anon','public.vault_legacy_reversions','select,insert,update,delete') or has_table_privilege('authenticated','public.vault_legacy_reversion_rows','select,insert,update,delete') or has_table_privilege('anon','public.vault_legacy_reversion_rows','select,insert,update,delete') then raise exception 'legacy reversion privilege is too broad'; end if; end \$\$;"
-# An older migration reapplied by mistake recreates device-less overloads; the latest migration closes them.
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260921000000_vault_hardening.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20260922140000_audit_fixes.sql
-psql -X -v ON_ERROR_STOP=1 -d "$test_db" -c "do \$\$ begin if exists(select 1 from pg_proc where oid in (to_regprocedure('public.sync_quotes(uuid,bigint,jsonb)'),to_regprocedure('public.checked_import(uuid,bigint,jsonb)'),to_regprocedure('public.edit_quote(uuid,uuid,text,text,date)'),to_regprocedure('public.edit_quotes(uuid,jsonb)')) and (has_function_privilege('authenticated',oid,'execute') or has_function_privilege('anon',oid,'execute'))) or to_regprocedure('public.sync_quotes(uuid,bigint,jsonb)') is null then raise exception 'legacy overload remains executable'; end if; end \$\$;"
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-removal-seed.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20261002000000_remove_device_envelope.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f supabase/migrations/20261002000000_remove_device_envelope.sql
+psql -X -v ON_ERROR_STOP=1 -d "$test_db" -f tests/database-envelope-removal.sql
 createdb "$migration_db"
 psql -X -v ON_ERROR_STOP=1 -d "$migration_db" -f tests/database-migration.sql
 createdb "$hardening_db"

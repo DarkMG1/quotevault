@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadModule } from './load-module.mjs';
 
-const state = { envelope_status: 'legacy', generation: '11111111-1111-4111-8111-111111111111', prepared_generation: null, legacy_generation: null,
+const state = { generation: '11111111-1111-4111-8111-111111111111', legacy_generation: null,
   kdf: { salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600000 },
   verifier: { iv: 'AAAAAAAAAAAAAAAA', data: 'AAAAAAAAAAAAAAAAAAAAAA==' } };
 function setup() {
@@ -12,7 +12,7 @@ function setup() {
   const network = { result: { data: state, error: null } };
   const exports = loadModule('src/lib/vault.ts', {
     './supabase': { supabase: { rpc: async name => {
-      assert.equal(name, 'get_vault_bootstrap_state'); calls++; return network.result;
+      assert.equal(name, 'get_vault_state'); calls++; return network.result;
     } } },
   }, { navigator, atob, localStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) } });
   return { ...exports, navigator, network, calls: () => calls, stored };
@@ -59,76 +59,4 @@ test('local-only settings never wait for an online session refresh', async () =>
   app.network.result = { data: null, error: { code: '42501', message: 'Must not be requested' } };
   assert.equal((await app.loadVaultState('alice', true)).generation, state.generation);
   assert.equal(app.calls(), 1);
-});
-
-test('server state requires an explicit envelope status and rejects legacy verifier material after cutover', () => {
-  const app = setup();
-  const { envelope_status, prepared_generation, ...preMigration } = state;
-  assert.throws(() => app.parseVaultState(preMigration), /Invalid/);
-  assert.throws(() => app.parseVaultState({ ...state, envelope_status: 'active' }), /Invalid/);
-  const active = app.parseVaultState({ envelope_status: 'active', generation: state.generation, prepared_generation: null });
-  assert.equal(active.envelope_status, 'active');
-});
-
-test('only cached pre-migration legacy settings are normalized for offline compatibility', () => {
-  const app = setup();
-  const { envelope_status, prepared_generation, ...preMigration } = state;
-  app.stored.set('quotevault:settings:alice', JSON.stringify(preMigration));
-  assert.equal(app.readCachedVaultState('alice')?.envelope_status, 'legacy');
-  app.stored.set('quotevault:settings:bob', JSON.stringify({ ...state, envelope_status: 'active' }));
-  assert.equal(app.readCachedVaultState('bob'), null);
-});
-
-test('legacy vault mutation responses normalize only the known pre-union shape', () => {
-  const app = setup();
-  const { envelope_status, prepared_generation, ...mutation } = state;
-  const initialized = app.parseLegacyVaultMutation(mutation);
-  assert.equal(initialized.envelope_status, 'legacy');
-  assert.equal(initialized.prepared_generation, null);
-  assert.throws(() => app.parseLegacyVaultMutation({ ...mutation, envelope_status: 'legacy' }), /Invalid/);
-  assert.throws(() => app.parseLegacyVaultMutation({ ...mutation, prepared_generation: null }), /Invalid/);
-});
-
-test('initial legacy preparation keeps the source generation and target enrollment generation', () => {
-  const app = setup();
-  const preparing = app.parseVaultState({ ...state, envelope_status: 'preparing', prepared_generation: '22222222-2222-4222-8222-222222222222' });
-  assert.equal(app.isLegacyVaultState(preparing), true);
-  assert.equal(app.quoteGeneration(preparing), state.generation);
-  assert.equal(app.enrollmentGeneration(preparing), preparing.prepared_generation);
-});
-
-test('retained rotation preparation is an envelope state without legacy key metadata', () => {
-  const app = setup();
-  const preparing = app.parseVaultState({ envelope_status: 'preparing', generation: state.generation,
-    prepared_generation: '22222222-2222-4222-8222-222222222222' });
-  assert.equal(app.isLegacyVaultState(preparing), false);
-  assert.equal(app.quoteGeneration(preparing), state.generation);
-  assert.equal(app.enrollmentGeneration(preparing), preparing.prepared_generation);
-  assert.throws(() => app.parseVaultState({ ...preparing, kdf: state.kdf }), /Invalid/);
-});
-
-test('retained rotation approves a new device with the still-usable source generation', () => {
-  const app = setup();
-  const preparing = app.parseVaultState({ envelope_status: 'preparing', generation: state.generation,
-    prepared_generation: '22222222-2222-4222-8222-222222222222' });
-  assert.equal(app.approvalGeneration(preparing), state.generation);
-  assert.equal(app.approvalGeneration(app.parseVaultState({ ...state, envelope_status: 'preparing', prepared_generation: preparing.prepared_generation })), preparing.prepared_generation);
-});
-
-test('legacy conversion metadata survives cutover without storing the group key', () => {
-  const app = setup();
-  app.cacheVaultState('alice', state);
-  app.cacheVaultState('alice', { envelope_status: 'active', generation: '22222222-2222-4222-8222-222222222222', prepared_generation: null });
-  assert.equal(JSON.stringify(app.readLegacyConversionState('alice')), JSON.stringify({ generation: state.generation, kdf: state.kdf, verifier: state.verifier }));
-  assert.equal(JSON.stringify([...app.stored.values()]).includes('group vault key'), false);
-  app.clearLegacyConversionState('alice');
-  assert.equal(app.readLegacyConversionState('alice'), null);
-});
-
-test('a pre-feature legacy cache preserves conversion metadata on first active refresh', async () => {
-  const app = setup();
-  app.stored.set('quotevault:settings:alice', JSON.stringify(state));
-  app.network.result = { data: { envelope_status: 'active', generation: '22222222-2222-4222-8222-222222222222', prepared_generation: null }, error: null };
-  await app.loadVaultState('alice');
-  assert.equal(app.readLegacyConversionState('alice')?.generation, state.generation);
 });

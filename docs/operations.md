@@ -29,166 +29,16 @@ private `quotevault-sync` channel. Verify its membership policy on
 `realtime.messages`, anonymous denial, and inability for clients to publish a
 reset signal. Public-channel clients from older releases may need to reload.
 Do not reapply the old migration after the new one; that would replace newer
-function bodies with their older definitions. If an older migration was reapplied by
-mistake, reapply `20260922140000_audit_fixes.sql`; it revokes the device-less RPC
-overloads that older files recreate.
+function bodies with their older definitions.
 
-Staging a migration wraps the new vault key only for device and recovery keys
-attested under the current key. Devices attest themselves when unlocked and
-recovery keys when created, so a device that has not unlocked in the current
-generation appears as `missing_device_wrapper` until it unlocks once.
+## Removed device-envelope rollout
 
-### Device-envelope rollout
-
-The device-envelope rollout is additive. Keep production in `legacy` or
-`preparing` while deploying the compatible database and frontend. Do not call
-`activate_envelope_migration` during deployment. Production activation is a
-separate security-sensitive operation and requires explicit approval after
-every member is enrolled and the encrypted backup has been verified.
-
-From a clean, reviewed commit, link the intended Supabase project and inspect
-the pending migration list before applying anything:
-
-```sh
-supabase link --project-ref umcprnfdaomntzhvmaoc
-supabase migration list
-supabase db push --linked
-```
-
-The migrations must be applied in timestamp order. The envelope additions are,
-in order, `20260922000000_checked_import.sql`,
-`20260922010000_admin_quote_edit.sql`, `20260922020000_envelope_foundation.sql`,
-`20260922030000_envelope_recovery.sql`,
-`20260922040000_recovery_device_transition.sql`,
-`20260922050000_recovery_binding_metadata.sql`,
-`20260922060000_device_bootstrap.sql`,
-`20260922070000_bootstrap_contract_hardening.sql`,
-`20260922080000_device_authorized_rpcs.sql`,
-`20260922090000_device_authorized_rpc_fixes.sql`,
-`20260922100000_device_recovery_requirement.sql`,
-`20260922110000_bootstrap_state_rpc.sql`,
-`20260922120000_envelope_migration.sql`,
-`20260922130000_envelope_rotation.sql`, and
-`20260922140000_audit_fixes.sql`. Never apply these files out of order
-or by copying individual function bodies into the SQL editor. Read back
-`vault_state.envelope_status` and confirm it is still `legacy` after the
-migrations.
-
-The production prerequisite is Supabase's native `pg_cron` extension. Enable
-it before the migration that creates the purge schedule. If it is unavailable,
-leave the schedule absent and run the service-only purge RPC from a controlled
-operator job; do not grant the purge function to browser clients.
-
-Deploy the signing function only after the database functions exist:
-
-```sh
-supabase functions deploy vault-security --project-ref umcprnfdaomntzhvmaoc
-```
-
-Set the private lease signing JWK through the Supabase secret store. Read it
-from a password manager or an interactive terminal; never put it in `.env`, a
-repository file, shell history, a deployment archive, or a `VITE_` variable:
-
-```sh
-read -r -s DEVICE_LEASE_PRIVATE_JWK
-printf '\n'
-supabase secrets set --project-ref umcprnfdaomntzhvmaoc \
-  DEVICE_LEASE_PRIVATE_JWK="$DEVICE_LEASE_PRIVATE_JWK"
-unset DEVICE_LEASE_PRIVATE_JWK
-```
-
-The public half is not secret, but it must match the private signing key. Put
-only that public JWK in the build environment as
-`VITE_DEVICE_LEASE_PUBLIC_JWK`, verify that it contains no private EC fields,
-and run `scripts/check-client-env.mjs` before building. Keep the private and
-public halves separate and record only the public-key fingerprint in the
-release notes. If the lease key is rotated, generate a new P-256 keypair,
-publish the matching public JWK with the next static build, set the new
-private JWK in Supabase, and verify lease renewal before removing the old
-secret. Do not rotate the signing key and activate a vault generation in the
-same change window.
-
-Deploy the static app with the staged release procedure below. Verify the
-anonymous health check and confirm that an existing legacy device can still
-sign in, unlock, read, edit, import, and synchronize. Enroll devices before
-activation; enrollment creates a device wrapper but does not activate the new
-generation.
-
-For activation, use an unlocked approved administrator device:
-
-1. Download the encrypted backup and store it outside the repository. Verify
-   its checksum and that a restore can read the expected quote count.
-2. Create or resume the migration, download the current encrypted source
-   snapshot, stage every quote, and wait for every active device to report a
-   recent empty queue. Refresh the snapshot if the source revision changes.
-3. Review readiness, including member wrappers, recovery wrappers, device
-   leases, quote count, and queue reports. Stop if any member or device is
-   missing.
-4. Obtain separate explicit approval immediately before calling
-   `activate_envelope_migration`. Activation enters `maintenance` and retains
-   rollback copies for seven days.
-5. Verify the target generation, quote count, decryptability, device sync,
-   edit/import authorization, offline unlock, and reconnect synchronization.
-6. Call `finalize_envelope_migration` only after verification. This removes
-   the active migration pointer and marks the generation `active`.
-
-If verification fails while rollback is available, stop writes, call
-`rollback_envelope_migration`, verify the restored source generation, and keep
-the compatible frontend serving legacy behavior. If the process is interrupted
-after `maintenance`, use an already authorized maintenance device or the
-documented admin recovery path; do not delete rollback rows manually. After
-the seven-day retention window, `purge_expired_vault_rollback` deletes the
-rollback quote copies. Record the purge result and verify that the active
-generation remains readable before pruning old static releases.
-
-Removing a member always revokes the allowlist entry, devices, wrappers,
-recovery records, pending requests, and sessions. Choose explicitly between
-removing access and removing access plus retained-history rotation. The latter
-uses the same prepare, stage, activate, verify, finalize, and purge workflow;
-it must not call the destructive legacy `rotate_vault` operation. Offline
-queued work from an active device is converted through its short-lived
-conversion wrapper. A removed member's pending work is rejected and is never
-copied into the new generation.
-
-During the first shared-key cutover, a client that created offline work after
-its empty-queue report asks for the previous group vault key once. The browser
-uses it only in memory to re-encrypt that queued work, then removes the cached
-public derivation metadata. The key and password are never stored or sent.
-
-### Rollback to the shared vault key
-
-The rollback works from `legacy` or `active` at any time. It never deletes a
-quote: the pre-reversion ciphertext is retained in
-`vault_legacy_reversion_rows` (`row_kind='source'`).
-
-1. From `preparing`, first click **Cancel preparation** (abandon). From
-   `maintenance`, use **rollback** (within 7 days) or finalize first.
-2. Ask every member to open the app online and confirm **Sync now** shows no
-   pending changes. Unsynced offline work is not uploaded by a reversion.
-3. Record `scripts/quote-fingerprint.sql` output (count and `id_digest`).
-4. On an unlocked administrator device: Admin → **Dry run (no changes)**.
-   Stop if it reports any quote ID.
-5. Enter a new shared passphrase (12+ characters), repeat it, type
-   `RETURN TO SHARED KEY`, and click **Return to shared vault key**.
-6. Rerun the fingerprint: `quote_count` and `id_digest` must equal step 3,
-   `envelope_status` must be `legacy`.
-7. Optional: restore the shared-key frontend. Switch it immediately after
-   step 6, before anyone is given the new passphrase — while `current` is
-   still the new frontend, it keeps writing v2 quotes in `legacy` mode,
-   which release a1bb840 shows as "Decryption Failed". If the switch is
-   wanted later and any time has passed since the reversion, rerun steps
-   2-6 first (the reversion works from `legacy` too, and the same
-   passphrase may be reused), then switch immediately:
-   ```sh
-   ssh vps 'cd /home/dark/quotevault && ln -sfn releases/a1bb8400bf2c6ad013f756ccb6ee7a70c8640eb1 current.next && mv -Tf current.next current'
-   python3 scripts/healthcheck.py --site https://quotes.darkmg1.dev --env-file .env
-   ```
-   Rerun the fingerprint again: `v2_count` must be `0`. If it is not,
-   point `current` back at the new-frontend release (same `ln -sfn … &&
-   mv -Tf` command with that release directory), rerun steps 2-6, and
-   switch again; the old frontend cannot rewrite v2 quotes itself. Only once the
-   frontend decision above is complete does the operator give every
-   member the new shared passphrase, out of band.
+Device-envelope encryption (`20260922020000` through `20261001000000`) was applied
+to production and then removed by `20261002000000_remove_device_envelope.sql`, which
+returns the schema to the shared-key design without changing any quote, profile,
+allowlist, or vault setting. All of these files are applied migration history: keep
+them, never reapply one individually, and let `supabase db push` apply only new files.
+`scripts/test-database.sh` replays the whole chain and verifies the removal.
 
 ## Static release
 
@@ -263,26 +113,3 @@ no quote content, tokens, or account data. Configure the notification destinatio
 explicitly before promising external alerts.
 Pass `--revision FULL_40_CHARACTER_COMMIT` to also verify the served manifest,
 HTML, and script hashes against that release. Deployment always uses this check.
-
-## Browser support and PWA boundary
-
-The supported target is the current mainstream release of Safari on iPhone and
-iPad, Chrome and Firefox on Android, and Safari, Chrome, Firefox, and Edge on
-macOS, Windows, and Linux. Web Crypto, IndexedDB, Service Workers, WebAuthn,
-and the platform's passkey PRF are feature-detected; PRF is an enhancement,
-not the only recovery path. Exact OS/browser/authenticator combinations must be
-tested before being marked supported. Any physical combination not tested in
-the release record remains **unverified**.
-
-The PWA service worker is asset-only: `vite-plugin-pwa` precaches the app shell
-and static image/style/script assets, while encrypted quote data remains in
-the browser's encrypted local store. It must never read vault keys, decrypt
-quotes, or cache Supabase responses. Verify the generated service-worker
-manifest contains only static build assets and that a cache inspection contains
-no access token, private JWK, passphrase, device token, or plaintext quote.
-
-The current Nginx CSP permits same-origin scripts/workers and the required
-Supabase HTTPS/WebSocket endpoints only. Keep `script-src 'self'`,
-`worker-src 'self'`, `object-src 'none'`, and `frame-ancestors 'none'`; do not
-add third-party script origins for QR, passkey, or analytics behavior. Recheck
-the public CSP and cache headers after every Nginx or Cloudflare change.

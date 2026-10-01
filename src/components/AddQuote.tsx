@@ -3,11 +3,12 @@ import { Save, Quote as QuoteIcon, X } from 'lucide-react';
 import { useQuotes } from '../hooks/useQuotes';
 import { useAuth } from '../hooks/useAuth';
 import { useCrypto } from '../hooks/useCrypto';
+import { encryptData } from '../lib/crypto';
 import { saveQuoteEdit } from '../lib/quote-edit';
 import { isAdminUser } from '../lib/access';
 import type { Quote } from '../types';
 import { loadProfiles, type AuthorProfile } from '../lib/profile-cache';
-import { getErrorMessage, localDateInputValue, useModalDialog } from './ui';
+import { getErrorMessage, isCiphertextWithinLimit, localDateInputValue, useModalDialog } from './ui';
 
 interface AddQuoteProps { onClose: () => void; edit?: { stored: Quote; display: Quote }; }
 
@@ -24,7 +25,7 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
     const [saveError, setSaveError] = useState('');
     const { addQuote, refresh } = useQuotes();
     const { user, canSync } = useAuth();
-    const { encryptionKey, isLocked, vaultGeneration, deviceId, getDeviceAuthorization } = useCrypto();
+    const { encryptionKey, isLocked, vaultGeneration } = useCrypto();
     const lifecycle = useRef(0);
     const [profiles, setProfiles] = useState<AuthorProfile[]>([]);
     const [isLoadingProfiles, setIsLoadingProfiles] = useState(false);
@@ -79,7 +80,7 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
                 if (!isAdminUser(user) || !canSync || vaultGeneration !== edit.stored.vault_generation) {
                     throw new Error('An online admin session is required to edit quotes.');
                 }
-                await saveQuoteEdit(edit.stored, { text, author, context, quoteDate }, encryptionKey, () => lifecycle.current === epoch, deviceId ? getDeviceAuthorization : undefined);
+                await saveQuoteEdit(edit.stored, { text, author, context, quoteDate }, encryptionKey, () => lifecycle.current === epoch);
                 if (lifecycle.current === epoch) { await refresh(); onClose(); }
                 return;
             }
@@ -87,7 +88,13 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
             const sourceSender = submitter ? authorLabel(submitter) :
                 [user?.user_metadata?.first_name, user?.user_metadata?.last_name].filter(value => typeof value === 'string' && value.trim()).join(' ');
             if (!user || !sourceSender.trim()) throw new Error('Your name is unavailable. Update your profile before submitting a quote.');
-            await addQuote({ text: text.trim(), author: author.trim(), context: context.trim(), ...(sourceSender.trim() ? { source_sender: sourceSender.trim() } : {}) }, quoteDate);
+            const payloadToEncrypt = JSON.stringify({ text: text.trim(), author: author.trim(), context: context.trim(), ...(sourceSender.trim() ? { source_sender: sourceSender.trim() } : {}) });
+            const encryptedBundle = await encryptData(payloadToEncrypt, encryptionKey);
+            if (!isCiphertextWithinLimit(encryptedBundle)) {
+                throw new Error('This quote is too large to save. Shorten the quote or context and try again.');
+            }
+            const serializedCiphertext = `$$E2E$$${JSON.stringify(encryptedBundle)}`;
+            await addQuote(serializedCiphertext, 'ENCRYPTED', 'ENCRYPTED', quoteDate);
             onClose();
         } catch (error: unknown) {
             setSaveError(getErrorMessage(error, 'Unable to save quote. Your draft is still here.'));

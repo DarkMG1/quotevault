@@ -28,32 +28,3 @@ export interface SyncMetadata {
     id: string;
     value: string | number;
 }
-
-export interface EnvelopeCiphertext { version: 2; iv: string; data: string }
-export interface RecoveryKdf { version: 1; salt: string; iterations: 600000 }
-export interface PasskeyPrfProtection { version: 1; rpId: 'quotes.darkmg1.dev'; credentialId: string; prfSalt: string; kdf: 'HKDF-SHA-256' }
-export interface BundleBinding {
-    accountId: string; recordId: string; publicKeyFingerprint: string;
-    protectionMode: 'passkey-prf' | 'remembered' | 'recovery'; version: 1;
-    recoveryKdf?: RecoveryKdf;
-    protection?: PasskeyPrfProtection;
-}
-export interface PrivateDeviceBundle { version: 1; privateJwk: JsonWebKey; authorizationToken: string }
-export interface VaultKeyWrapperBinding { vaultId: 'quotevault'; generation: string; targetFingerprint: string }
-export interface VaultKeyWrapperPlaintext extends VaultKeyWrapperBinding { version: 1; masterKey: Uint8Array }
-export type DeviceLeaseClaims = readonly [1, string, string, string, number, number, string];
-export interface DeviceLease { version: 1; claims: DeviceLeaseClaims; signature: string }
-export interface DeviceLocalState {
-    accountId: string;
-    deviceId: string;
-    publicKeyFingerprint: string;
-    protectionMode: 'passkey-prf' | 'remembered';
-    protection: Record<string, unknown>;
-    encryptedPrivateBundle: EnvelopeCiphertext;
-    rememberedKey?: CryptoKey;
-    lease?: DeviceLease;
-    wrapper?: { generation: string; wrappedKey: string };
-    preparedWrapper?: { generation: string; wrappedKey: string };
-    /** Safe local marker: first enrollment may not reveal quotes before recovery exists. */
-    recoverySetupRequired?: boolean;
-}

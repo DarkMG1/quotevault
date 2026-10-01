@@ -1,5 +1,4 @@
 import { decryptData, encryptData } from './crypto';
-import { decryptQuoteRecord, encryptQuoteRecord } from './quote-crypto';
 import { db } from './db';
 import { supabase } from './supabase';
 import { processSyncQueue, type SyncContext } from './sync';
@@ -98,18 +97,15 @@ export function checkImports(rows: ImportRow[], existing: ExistingQuote[]): Impo
     });
 }
 
-async function rpc(name: 'sync_quotes' | 'checked_import', args: Record<string, unknown>, authorization: { deviceId: string; token: string } | null) {
+async function rpc(name: 'sync_quotes' | 'checked_import', args: Record<string, unknown>) {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => { controller.abort(); reject(new Error('Import request timed out. Check the saved import status before starting another.')); }, 20000);
     });
     try {
-        const { data, error } = await Promise.race([supabase.rpc(name, {
-            ...args, p_device_id: authorization?.deviceId ?? null, p_device_token: authorization?.token ?? null,
-        }).abortSignal(controller.signal), timeout]);
+        const { data, error } = await Promise.race([supabase.rpc(name, args).abortSignal(controller.signal), timeout]);
         if (error) throw Object.assign(new Error(error.message || 'Import request failed.'), { code: error.code });
-        if (data === null) throw Object.assign(new Error('Device authorization was denied. Unlock this device and retry the import.'), { code: '42501' });
         return data;
     } finally { clearTimeout(timer!); }
 }
@@ -119,12 +115,11 @@ export async function loadImportSnapshot(context: SyncContext, key: CryptoKey): 
     if (!await processSyncQueue(context)) throw new Error('Wait for synchronization, then check again.');
     const queue = await db.syncQueue.toArray();
     if (queue.some(row => row.actor_id === context.actorId && row.vault_generation === context.generation)) throw new Error('Resolve pending or rejected sync changes before importing.');
-    const authorization = context.getDeviceAuthorization ? await context.getDeviceAuthorization() : null;
-    const data = await rpc('sync_quotes', { p_generation: context.generation, p_revision: null, p_operations: [] }, authorization);
+    const data = await rpc('sync_quotes', { p_generation: context.generation, p_revision: null, p_operations: [] });
     if (data?.generation !== context.generation || !Number.isSafeInteger(data.revision) || data.revision < 0 || !Array.isArray(data.quotes)) throw new Error('Could not verify the current vault snapshot.');
     const quotes = await Promise.all(data.quotes.map(async (row: Quote) => {
         if (row.vault_generation !== context.generation || typeof row.text !== 'string' || !row.text.startsWith('$$E2E$$')) throw new Error('An existing quote could not be checked safely.');
-        const payload: unknown = await decryptQuoteRecord(row, key);
+        const payload: unknown = JSON.parse(await decryptData(JSON.parse(row.text.slice(7)), key));
         if (!isDecryptedPayload(payload)) throw new Error('An existing encrypted quote is invalid.');
         const source = (payload as { import_source_id?: unknown }).import_source_id;
         if (source !== undefined && (typeof source !== 'string' || !/^[a-f0-9]{64}$/.test(source))) throw new Error('Invalid existing import identity.');
@@ -148,15 +143,13 @@ export async function prepareImport(rows: ImportRow[], snapshot: ImportSnapshot,
     if (rows.some(row => !row.text.trim() || !row.author.trim())) throw new Error('Every selected quote needs text and a person quoted.');
     if (!rows.length || rows.length > 500 || checkImports(rows, snapshot.quotes).some(check => check.duplicate)) throw new Error('Remove duplicate entries before importing.');
     const operations: ImportOperation[] = await Promise.all(rows.map(async row => {
+        const bundle = await encryptData(JSON.stringify({ text: row.text, author: row.author, context: row.context,
+            source_sender: row.source_sender, ...(row.import_source_id ? { import_source_id: row.import_source_id } : {}) }), key);
+        if (!isCiphertextWithinLimit(bundle)) throw new Error('A quote is too large to import.');
         const id = crypto.randomUUID();
-        const encrypted = await encryptQuoteRecord({ text: row.text, author: row.author, context: row.context,
-            source_sender: row.source_sender, ...(row.import_source_id ? { import_source_id: row.import_source_id } : {}) }, {
-            id, quote_date: row.quote_date, created_at: new Date().toISOString(), user_id: context.actorId,
-            vault_generation: context.generation,
-        }, key);
-        if (!isCiphertextWithinLimit(JSON.parse(String(encrypted.text).slice(7)))) throw new Error('A quote is too large to import.');
         return { operation_id: crypto.randomUUID(), action: 'INSERT', quote_id: id, actor_id: context.actorId,
-            vault_generation: context.generation, payload: { ...encrypted, author: 'ENCRYPTED', context: 'ENCRYPTED' } as Quote };
+            vault_generation: context.generation, payload: { id, text: `$$E2E$$${JSON.stringify(bundle)}`, author: 'ENCRYPTED', context: 'ENCRYPTED',
+                quote_date: row.quote_date, created_at: new Date().toISOString(), user_id: context.actorId, vault_generation: context.generation } };
     }));
     if (new TextEncoder().encode(JSON.stringify(operations)).length > MAX_BATCH_BYTES) throw new Error('Import is too large for one atomic batch. Select fewer quotes.');
     if (!active()) throw new Error('Vault access changed; unlock and review again.');
@@ -175,8 +168,7 @@ export async function sendPendingImport(pending: PendingImport, context: SyncCon
     if (pending.actorId !== context.actorId || pending.generation !== context.generation) throw new Error('Saved import belongs to another vault session.');
     if (!navigator.onLine) throw new Error('Connect to check the saved import status.');
     try {
-        const authorization = context.getDeviceAuthorization ? await context.getDeviceAuthorization() : null;
-        const data = await rpc('checked_import', { p_generation: pending.generation, p_revision: pending.revision, p_operations: pending.operations }, authorization);
+        const data = await rpc('checked_import', { p_generation: pending.generation, p_revision: pending.revision, p_operations: pending.operations });
         const expected = new Set(pending.operations.map(op => op.operation_id));
         if (data?.generation !== pending.generation || !Array.isArray(data.results) || data.results.length !== expected.size ||
             !data.results.every((result: { operation_id: string; status: string }) => result.status === 'ok' && expected.delete(result.operation_id))) throw new Error('Import confirmation is incomplete. Check the saved import status.');

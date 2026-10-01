@@ -19,7 +19,6 @@ jobs:
       PGPASSWORD: local-test-only
       VITE_SUPABASE_URL: https://example.supabase.co
       VITE_SUPABASE_ANON_KEY: sb_publishable_ci_placeholder
-      VITE_DEVICE_LEASE_PUBLIC_JWK: '{"kty":"EC","crv":"P-256","x":"QjM2-RC4L30GHX65OHkHWNTj-C35S3JbP2B8RyqDOo0","y":"80p6ndkl3Kc9IsD5Bp6vcGgl79lWldtXgLGU8nvkS3U"}'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -27,10 +26,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
-        with:
-          deno-version: v2.x
-      - run: npm run test:edge
       - run: npm test
       - run: npm run lint
       - run: npm run build

@@ -6,25 +6,6 @@ async function unlock(page: Page) {
   await expect(page.getByRole('button', { name: 'Add quote', exact: true })).toBeVisible();
 }
 
-test('legacy unlock clears the submitted vault key', async ({ page }) => {
-  await page.goto('/');
-  await page.locator('input[type=email]').fill('browser-test@example.com');
-  await page.locator('input[type=password]').fill('local-test-password');
-  await page.getByRole('button', { name: 'Sign In', exact: true }).click();
-  const key = page.getByLabel('Group Vault Key');
-  await page.evaluate(() => {
-    const reset = HTMLFormElement.prototype.reset;
-    HTMLFormElement.prototype.reset = function () {
-      Reflect.set(window, '__legacyVaultFormReset', true);
-      return reset.call(this);
-    };
-  });
-  await key.fill('demo-vault-key');
-  await page.getByRole('button', { name: 'Unlock Vault', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => Reflect.get(window, '__legacyVaultFormReset'))).toBe(true);
-  await expect(page.getByRole('button', { name: 'Add quote', exact: true })).toBeVisible();
-});
-
 async function localRows(page: Page, table: string) {
   return page.evaluate(async name => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -189,7 +170,7 @@ test('offline sign-out locks immediately and cannot revive cached access on relo
 test('a membership denial locks an already unlocked local vault and removes offline preparation', async ({ page, context }) => {
   await prepareDevice(page);
   const release = Promise.withResolvers<void>();
-  await page.route('**/rest/v1/rpc/get_vault_bootstrap_state', async route => {
+  await page.route('**/rest/v1/rpc/get_vault_state', async route => {
     await release.promise;
     await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ code: '42501', message: 'Vault membership denied' }) });
   });
@@ -202,8 +183,8 @@ test('a membership denial locks an already unlocked local vault and removes offl
   await context.setOffline(true);
   await page.reload();
   await expect(page.getByRole('alert')).toContainText('Connect once');
-  await expect(page.getByLabel('Group Vault Key')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Add quote', exact: true })).toHaveCount(0);
+  await page.getByLabel('Group Vault Key').fill('demo-vault-key');
+  await expect(page.getByRole('button', { name: 'Unlock Vault', exact: true })).toBeDisabled();
 });
 
 test('a second tab cannot revive access during pending online sign-out', async ({ page, context }) => {
@@ -260,21 +241,4 @@ test('Sync now is visible and manual retries retain encrypted changes until ackn
   await sync.click();
   await expect.poll(() => localRows(page, 'syncQueue').then(rows => rows.length)).toBe(0);
   await expect(page.getByText(/Last synced/)).toBeVisible();
-});
-
-test('the service worker caches app assets but never vault or authentication responses', async ({ page }) => {
-  await prepareDevice(page);
-  const cached = await page.evaluate(async () => {
-    const keys = await caches.keys();
-    return (await Promise.all(keys.map(async key => (await caches.open(key)).keys())))
-      .flat().map(request => request.url);
-  });
-  expect(cached.length).toBeGreaterThan(0);
-  const origin = new URL(page.url()).origin;
-  for (const value of cached) {
-    const url = new URL(value);
-    expect(url.origin).toBe(origin);
-    expect(url.pathname).not.toMatch(/^\/(?:auth|rest|functions)\/v1\//);
-    expect(url.pathname).not.toMatch(/^\/fixture\//);
-  }
 });
