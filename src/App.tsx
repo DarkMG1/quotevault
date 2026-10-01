@@ -70,7 +70,7 @@ const ProtectedRoute = () => {
       <Layout currentPath={currentPath}>
         {!canSync && <p role="status" className="p-4 text-sm text-slate-300">Using saved quotes on this device. Sync resumes when your session reconnects. <button onClick={retry} className="text-primary-400 underline">Retry connection</button></p>}
         <ScreenErrorBoundary key={screen}><Suspense fallback={<Spinner />}>
-        {!canSync && (currentPath === '#admin' || currentPath === '#profile') ? (
+        {!canSync && screen !== '#' ? (
           <p className="p-4">Connect and restore your session to manage account settings.</p>
         ) : currentPath === '#admin' ? (
           <AdminDashboard />
