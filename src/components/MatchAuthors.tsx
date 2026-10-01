@@ -47,6 +47,13 @@ export function MatchAuthors({ onClose }: { onClose: () => void }) {
         }
         return () => { current.current++; };
     }, [actorId, encryptionKey, canSync, loading, initialFetchPending, quotes]);
+    // Saving outlives quote-list refreshes; only a session change cancels it.
+    const session = useRef(0);
+    useEffect(() => {
+        const current = session;
+        current.current++;
+        return () => { current.current++; };
+    }, [actorId, encryptionKey, vaultGeneration, canSync]);
     const changes = rows.filter(row => mapping[row.author]?.trim() && mapping[row.author].trim() !== row.author)
         .map(row => ({ quote: row.quote, author: mapping[row.author] }));
     async function save() {
@@ -59,15 +66,17 @@ export function MatchAuthors({ onClose }: { onClose: () => void }) {
             setError('The vault changed. Sync, then reopen this dialog.');
             return;
         }
-        const epoch = lifecycle.current;
+        const epoch = session.current;
         setBusy(true); setError('');
         try {
-            await saveAuthorMatches(changes.slice(0, 500), encryptionKey, () => lifecycle.current === epoch);
-            if (lifecycle.current === epoch) { await refresh(); onClose(); }
+            await saveAuthorMatches(changes.slice(0, 500), encryptionKey, () => session.current === epoch);
+            if (session.current !== epoch) throw new Error('Your session changed while saving. Check the authors before saving again.');
+            await refresh();
+            onClose();
         } catch (cause) {
-            if (lifecycle.current === epoch) setError(getErrorMessage(cause, 'Could not save author corrections.'));
+            setError(getErrorMessage(cause, 'Could not save author corrections.'));
         } finally {
-            if (lifecycle.current === epoch) setBusy(false);
+            setBusy(false);
         }
     }
     return <dialog

@@ -246,3 +246,28 @@ test('matching authors with a quote from another vault generation shows an error
   await expect(dialog.getByRole('alert')).toContainText('The vault changed');
   expect(edits).toBe(0);
 });
+
+test('matching authors still closes when another tab changes the quote list mid-save', async ({ page, context }) => {
+  await enterVault(page);
+  let release!: () => void;
+  const released = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/rpc/edit_quotes', async route => { await released; await route.continue(); });
+  await page.getByRole('button', { name: 'Match imported authors', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Match imported authors', exact: true });
+  await dialog.getByLabel(`Replace author ${compound.author}`, { exact: true }).fill('Morgan Lee');
+  const sent = page.waitForRequest('**/rpc/edit_quotes');
+  await dialog.getByRole('button', { name: /^Save \d+ author corrections$/ }).click();
+  await sent;
+  const other = await context.newPage();
+  await other.goto('/');
+  await other.getByLabel('Group Vault Key').fill('demo-vault-key');
+  await other.getByRole('button', { name: 'Unlock Vault', exact: true }).click();
+  await other.getByRole('button', { name: 'Add quote', exact: true }).click();
+  const add = other.getByRole('dialog', { name: 'Add Quote', exact: true });
+  await add.getByLabel('Quote', { exact: true }).fill('A quote added in another tab during author matching.');
+  await add.getByRole('button', { name: 'Save Quote', exact: true }).click();
+  await expect(add).not.toBeVisible();
+  await expect(page.locator('blockquote').filter({ hasText: 'added in another tab during author matching' })).toBeVisible();
+  release();
+  await expect(dialog).not.toBeVisible();
+});
