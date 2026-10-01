@@ -851,6 +851,8 @@ Add `VITE_DEVICE_LEASE_PUBLIC_JWK=<public JSON>` to `.env`; run `node scripts/ch
 
 **Rollback:** Admin → cancel preparation (abandon). Quotes were never modified; vault returns to `legacy`.
 
+**Task 11 results (2026-10-01), administrator only:** migration prepared (target `7f9ac140…`, 224 quotes expected, status `staging`, legacy access open). Administrator passkey device `39e0b6a5…` (1Password, PRF) active with a target wrapper and lease; active recovery key `774c5ea2…` with a target wrapper (two earlier keys revoked). A Sept 23 `pending` remembered request is an expired leftover. Production fixes found during enrollment and deployed: migration-panel RPC argument names (`p_token`), RPC contract check in the database suite, Edge Function session check using the caller's token, PRF output accepted in every byte representation (1Password), enrollment/unlock errors shown on Profile, and `20261001000000_recovery_replace_preparing.sql`. Remaining members enroll later from their lock screens while the vault stays `preparing`; Task 12 waits until every allowlisted member has an active device and recovery key.
+
 ### Task 12: Activate, verify, finalize (explicit approval)
 
 - [ ] **Step 1** — Fingerprint → `fingerprint-2-pre-activation.txt`; Admin dry run passes.
