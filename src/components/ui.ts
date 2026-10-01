@@ -2,6 +2,8 @@ import { useEffect, useRef, type RefObject } from 'react';
 import { decryptData } from '../lib/crypto';
 import type { Quote } from '../types';
 
+export const dayFormat = { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' } as const;
+
 export function localDateInputValue(date = new Date()): string {
     const pad = (value: number) => String(value).padStart(2, '0');
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;

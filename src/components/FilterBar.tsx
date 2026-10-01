@@ -1,10 +1,9 @@
 import { useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { Search, X, SlidersHorizontal, ArrowDownWideNarrow, ArrowUpNarrowWide } from 'lucide-react';
 import type { QuoteFilters } from '../lib/quote-search';
+import { dayFormat } from './ui';
 
-const formatDay = (day: string) => new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, {
-    month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
-});
+const formatDay = (day: string) => new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, dayFormat);
 
 const toolButton = 'inline-flex flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-3 text-sm sm:flex-none';
 const dateInput = 'mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 p-2 text-white [color-scheme:dark]';

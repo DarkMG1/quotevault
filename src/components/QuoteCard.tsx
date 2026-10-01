@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useRef, useState, type PointerEvent } from 'react';
 import { CloudOff, Cloud, Trash2, Pencil } from 'lucide-react';
 import type { Quote } from '../types';
+import { dayFormat } from './ui';
 
 const SWIPE_TO_DELETE = -100;
 const DRAG_THRESHOLD = 3;
@@ -89,9 +90,7 @@ export const QuoteCard = ({ quote, canEdit, canDelete, leaving, onLeft, onEdit, 
                 <div className="flex items-center justify-between text-sm">
                     <div className="font-semibold text-primary-400">— {quote.author}</div>
                     <div className="text-slate-500 select-none">
-                        {new Date(quote.quote_date || quote.created_at).toLocaleDateString(undefined, {
-                            month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
-                        })}
+                        {new Date(quote.quote_date || quote.created_at).toLocaleDateString(undefined, dayFormat)}
                     </div>
                 </div>
                 {quote.context && (
