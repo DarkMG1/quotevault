@@ -14,7 +14,7 @@ In scope:
 - Redundant work in sync and decryption.
 - Readability: the dense, very long lines in several components.
 - Splitting oversized components.
-- Dead code, and compatibility shims for app versions older than the current release (Section 2, item 6).
+- Dead code. Compatibility shims for older cached versions only with the operator's permission (Section 2, item 6).
 - Small correctness bugs you find along the way. Prove each with a failing test first.
 
 Out of scope unless the operator asks:
@@ -43,10 +43,11 @@ Out of scope unless the operator asks:
    - Don't edit, rename, or delete anything in `supabase/migrations/`.
    - Any schema change needs a new file and operator approval, and is out of scope here.
    - `20260922020000`…`20261001000000` (envelope) and `20261002000000_remove_device_envelope.sql` (its removal) are applied in production. Never reapply one individually.
-6. **Old cached app versions are not supported.** Keeping a browser on the current build is the member's job: close every QuoteVault tab once to pick it up.
-   - You don't need to stay compatible with data or queue shapes written by older cached builds. Legacy shims for them can be deleted, e.g. the Dexie v1→v2 upgrade in `src/lib/db.ts`.
-   - What must keep working: the server data, the server schema and RPC contract, and the local data written by the **current** release.
-   - If a change would break a browser on an older build, the fix is "clear site data and reload", never a workaround in code.
+6. **Old cached app versions stay supported. Ask before breaking them.** Some members' browsers run older cached builds, some from before 2026-09-20.
+   - Keep compatibility with the data and queue shapes those builds wrote: Dexie schema versions and upgrade steps (e.g. the v1→v2 upgrade in `src/lib/db.ts`), sync queue item shapes, the `$$E2E$$` ciphertext format, and the RPCs and arguments the old clients call.
+   - **If a change would affect old cached versions in any way, stop and ask the operator for permission first.** That includes removing a compatibility shim, changing or dropping an old Dexie version or upgrade, changing what the server accepts, or changing the local data format.
+   - When asking, say which old builds are affected, what would happen to them (for example "must clear site data", or "their queued changes would be rejected"), and whether any unsynced data could be lost. Then wait for an explicit yes.
+   - Server data, the server schema and RPC contract, and the current release's local data must always keep working.
 
 ---
 
@@ -177,7 +178,7 @@ git diff --check
   - It ran a pre-2026-09-20 cached build. On 2026-10-01 it uploaded its 14 queued quotes (224 → 238), and the operator confirmed **they display correctly**.
   - Its 3 rejected inserts were duplicates of quotes already on the server, and its 1 blocked delete came from the old app.
   - Every quote is safely on the server, so clearing that browser's site data is safe and removes the leftover errors. Nothing to build for this.
-- **Members on old cached builds** must close every tab once to update (Section 2, item 6).
+- **Members on old cached builds** should close every tab once to update. The app must still support them until the operator agrees otherwise (Section 2, item 6).
 
 ---
 
@@ -208,7 +209,7 @@ Measured on 2026-10-01. Measure again before and after each item.
    - generation-mismatch handling, which keeps queued work as `blocked` and never deletes it.
 6. **Dead code, legacy shims and dependencies.**
    - Check `src/lib/quote-authors.ts`, `src/components/ui.ts` and `src/types/index.ts` for unused exports.
-   - Delete compatibility code that exists only for builds older than the current release (Section 2, item 6). Example: the Dexie v1→v2 upgrade path and the "Deletion created before secure sync" handling in `src/lib/db.ts`. Keep the current schema version, and make sure a browser on the current release still opens its data.
+   - Compatibility code for older cached builds stays by default. Example: the Dexie v1→v2 upgrade path and the "Deletion created before secure sync" handling in `src/lib/db.ts`. Removing or changing it needs the operator's permission first (Section 2, item 6).
    - Remove dependencies nothing imports.
    - Keep the `.gitignore` entry for `supabase/.temp/`.
 7. **Accessibility pass on touched components:** visible focus, labels, `role="alert"` on errors, and live regions for status. Don't regress what exists.
