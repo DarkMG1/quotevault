@@ -4,10 +4,10 @@ import { Loader2, Mail, Lock, Quote } from 'lucide-react';
 import { getErrorMessage } from './ui';
 import { useAuth } from '../hooks/useAuth';
 
-const fieldClass = 'w-full bg-slate-900/50 border border-slate-700/50 rounded-xl py-3.5 px-4 text-white placeholder:text-slate-500 '
+const fieldBase = 'w-full bg-slate-900/50 border border-slate-700/50 rounded-xl py-3.5 text-white placeholder:text-slate-500 '
     + 'focus:outline-none focus:ring-2 focus:ring-primary-500/50 transition-all font-medium';
-const iconFieldBase = 'w-full bg-slate-900/50 border border-slate-700/50 rounded-xl py-3.5 pl-12 pr-4 text-white placeholder:text-slate-500 '
-    + 'focus:outline-none focus:ring-2 focus:ring-primary-500/50 transition-all font-medium';
+const fieldClass = `${fieldBase} px-4`;
+const iconFieldBase = `${fieldBase} pl-12 pr-4`;
 const iconFieldClass = `${iconFieldBase} focus:border-primary-500/50`;
 const secondarySubmitClass = 'w-full bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-500 hover:to-primary-400 '
     + 'text-white font-semibold py-3.5 rounded-xl shadow-lg shadow-primary-500/25 transition-all disabled:opacity-50';
