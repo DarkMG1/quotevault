@@ -40,10 +40,8 @@ export const Feed = () => {
     useModalDialog(deleteDialogRef, Boolean(quoteToDelete), () => setQuoteToDelete(null), cancelDeleteRef);
 
     useEffect(() => {
+        if (!quotes) return;
         let active = true;
-        if (!quotes) {
-            return () => { active = false; };
-        }
 
         const { cache, decrypted } = decryptForFeed(quotes, encryptionKey, decryptCache.current);
         decryptCache.current = cache;
