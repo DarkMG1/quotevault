@@ -6,14 +6,18 @@ async function unlock(page: Page) {
   await expect(page.getByRole('button', { name: 'Add quote', exact: true })).toBeVisible();
 }
 
-test('lazy-loaded screens render offline from the service-worker precache', async ({ page, context }) => {
-  const errors: string[] = [];
-  page.on('pageerror', error => errors.push(error.message));
+async function signIn(page: Page) {
   await page.goto('/');
   await page.locator('input[type=email]').fill('browser-test@example.com');
   await page.locator('input[type=password]').fill('local-test-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
   await unlock(page);
+}
+
+test('lazy-loaded screens render offline from the service-worker precache', async ({ page, context }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await signIn(page);
   await page.evaluate(() => navigator.serviceWorker.ready.then(() => true));
 
   // The offline reload drops every module loaded online, so the Auth chunk loaded by signing out must come from the precache.
@@ -31,11 +35,7 @@ test.describe('without the service worker', () => {
 
   test('a screen chunk that fails to load leaves the feed reachable', async ({ page }) => {
     await page.route('**/assets/Profile-*.js', route => route.abort());
-    await page.goto('/');
-    await page.locator('input[type=email]').fill('browser-test@example.com');
-    await page.locator('input[type=password]').fill('local-test-password');
-    await page.getByRole('button', { name: 'Sign In', exact: true }).click();
-    await unlock(page);
+    await signIn(page);
 
     await page.getByRole('link', { name: 'Open profile', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('This screen could not load.');
