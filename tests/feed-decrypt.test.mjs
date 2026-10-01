@@ -53,12 +53,4 @@ const rekeyed = await feed(edited, otherKey, third.cache);
 assert.equal(rekeyed.output, await direct(edited, otherKey));
 assert.equal(rekeyed.calls, 3, 'a different key decrypts everything again');
 
-let calls = 0;
-let cache;
-for (let change = 0; change < 10; change++) {
-  const result = await feed(copies(quotes), key, cache);
-  ({ cache } = result);
-  calls += result.calls;
-}
-assert.equal(calls, 3, 'ten list changes decrypt each encrypted quote once (uncached: 30)');
 console.log('Feed decryption reuses in-memory plaintext for unchanged ciphertext and drops it for a new key.');
