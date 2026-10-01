@@ -176,8 +176,9 @@ export const AdminDashboard = () => {
                     Allowed Emails ({allowlist.length})
                 </div>
                 {loading ? (
-                    <div className="p-10 flex justify-center">
+                    <div role="status" className="p-10 flex justify-center">
                         <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+                        <span className="sr-only">Loading allowlist…</span>
                     </div>
                 ) : (
                     <ul className="divide-y divide-slate-700/50">
@@ -220,7 +221,7 @@ export const AdminDashboard = () => {
                 </div>
 
                 {wipeErrorMsg && (
-                    <div className="p-4 bg-red-500/20 border border-red-500/30 text-red-300 rounded-xl text-sm">
+                    <div role="alert" className="p-4 bg-red-500/20 border border-red-500/30 text-red-300 rounded-xl text-sm">
                         {wipeErrorMsg}
                     </div>
                 )}
@@ -263,10 +264,14 @@ export const AdminDashboard = () => {
                     <button
                         type="submit"
                         disabled={isWiping || vaultConfirm !== 'ERASE EVERYTHING'}
+                        aria-busy={isWiping}
                         className="w-full bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:bg-slate-800 disabled:text-slate-500 text-white font-medium py-3 rounded-xl transition-all flex items-center justify-center space-x-2 mt-4"
                     >
                         {isWiping ? (
-                            <Loader2 className="w-5 h-5 animate-spin" />
+                            <>
+                                <Loader2 className="w-5 h-5 animate-spin" />
+                                <span className="sr-only">Wiping database…</span>
+                            </>
                         ) : (
                             <span>Wipe Database & Change Key</span>
                         )}
