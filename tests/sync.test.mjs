@@ -372,6 +372,32 @@ await (async () => {
 })();
 
 await (async () => {
+  let locked = false;
+  const { db, sync, rpcCalls } = setup(args => ({ generation: 'g2', revision: 1, quotes: [],
+    results: args.p_operations.map(op => ({ operation_id: op.operation_id, status: args.p_generation === 'g2' ? 'ok' : 'rejected' })) }));
+  await db.quotes.put(quote('cached'));
+  const insert = await enqueue(db, sync, 'INSERT', quote('stale-insert'));
+  const remove = await enqueue(db, sync, 'DELETE', quote('stale-delete'));
+  const before = structuredClone([...db.syncQueue.rows.values()]);
+  await sync.processSyncQueue({ actorId: 'u1', generation: 'g1', onGenerationMismatch: () => { locked = true; } });
+  assert.equal(locked, true, 'generation mismatch locks the vault');
+  assert.equal(db.quotes.rows.size, 0, 'generation mismatch clears the old ciphertext cache');
+  for (const item of before) {
+    const kept = db.syncQueue.rows.get(item.id);
+    assert.equal(kept?.status, 'blocked', 'stale queued work is kept as blocked, never deleted');
+    assert.equal(JSON.stringify(kept.payload), JSON.stringify(item.payload), 'blocked work keeps its ciphertext unchanged');
+    assert.equal(kept.vault_generation, 'g1');
+    assert.equal(typeof kept.error, 'string', 'blocked work explains itself to the user');
+  }
+  const current = await enqueue(db, sync, 'INSERT', quote('current', 'g2'), 'u1', 'g2');
+  rpcCalls.length = 0;
+  await sync.processSyncQueue({ actorId: 'u1', generation: 'g2' });
+  const sent = rpcCalls.flatMap(call => call.p_operations.map(op => op.operation_id));
+  assert.equal(JSON.stringify(sent), JSON.stringify([current.operation_id]), 'stale work is never sent under the new generation');
+  assert.equal(db.syncQueue.rows.has(insert.id) && db.syncQueue.rows.has(remove.id), true, 'blocked work survives a later sync');
+})();
+
+await (async () => {
   const db = { quotes: table(), syncQueue: table(), metadata: table(), transaction: async (_mode, ...args) => args.at(-1)() };
   let attempts = 0;
   db.transaction = async (_mode, ...args) => {

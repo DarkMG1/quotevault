@@ -145,8 +145,14 @@ async function rejectStaleGeneration(context: SyncContext, epoch: number) {
     await db.transaction('rw', db.quotes, db.syncQueue, async () => {
         if (epoch !== syncEpoch) return;
         await db.quotes.clear();
+        // Keep stale work: its ciphertext uses the old key, so it is blocked from sending, never deleted.
         const stale = (await db.syncQueue.toArray()).filter(item => item.vault_generation === context.generation);
-        await db.syncQueue.bulkDelete(stale.map(item => item.id));
+        for (const item of stale) {
+            await db.syncQueue.update(item.id, {
+                status: 'blocked',
+                error: 'The vault key changed before this change synchronized; re-add it after unlocking.'
+            });
+        }
     });
     if (epoch === syncEpoch) context.onGenerationMismatch?.();
 }
