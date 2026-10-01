@@ -59,16 +59,17 @@ const ProtectedRoute = () => {
         <p>{error}</p>
         <button type="button" onClick={() => void retry()} className="mt-3 rounded-lg bg-red-500/20 px-3 py-2 text-sm font-medium hover:bg-red-500/30">Retry connection</button>
       </div>}
-      <Suspense fallback={<Spinner />}><AuthUI /></Suspense>
+      <ScreenErrorBoundary><Suspense fallback={<Spinner />}><AuthUI /></Suspense></ScreenErrorBoundary>
     </>;
   }
 
+  const screen = currentPath === '#admin' || currentPath === '#profile' ? currentPath : '#';
   return (
     <CryptoProvider key={user.id}>
       <QuotesProvider>
       <Layout currentPath={currentPath}>
         {!canSync && <p role="status" className="p-4 text-sm text-slate-300">Using saved quotes on this device. Sync resumes when your session reconnects. <button onClick={retry} className="text-primary-400 underline">Retry connection</button></p>}
-        <Suspense fallback={<Spinner />}>
+        <ScreenErrorBoundary key={screen}><Suspense fallback={<Spinner />}>
         {!canSync && (currentPath === '#admin' || currentPath === '#profile') ? (
           <p className="p-4">Connect and restore your session to manage account settings.</p>
         ) : currentPath === '#admin' ? (
@@ -78,7 +79,7 @@ const ProtectedRoute = () => {
         ) : (
           <Feed />
         )}
-        </Suspense>
+        </Suspense></ScreenErrorBoundary>
       </Layout>
       </QuotesProvider>
     </CryptoProvider>
@@ -88,7 +89,7 @@ const ProtectedRoute = () => {
 function App() {
   return (
     <AuthProvider>
-      <ScreenErrorBoundary><ProtectedRoute /></ScreenErrorBoundary>
+      <ProtectedRoute />
       <UpdateNotice />
     </AuthProvider>
   );

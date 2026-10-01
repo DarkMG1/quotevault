@@ -37,3 +37,23 @@ test('lazy-loaded screens render offline from the service-worker precache', asyn
   await expect(page.getByRole('button', { name: 'Sign In', exact: true })).toBeVisible({ timeout: 3000 });
   expect(errors).toEqual([]);
 });
+
+test.describe('without the service worker', () => {
+  test.use({ serviceWorkers: 'block' });
+
+  test('a screen chunk that fails to load leaves the feed reachable', async ({ page }) => {
+    await page.route('**/assets/Profile-*.js', route => route.abort());
+    await page.goto('/');
+    await page.locator('input[type=email]').fill('browser-test@example.com');
+    await page.locator('input[type=password]').fill('local-test-password');
+    await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+    await unlock(page);
+
+    await page.getByRole('link', { name: 'Open profile', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('This screen could not load.');
+    await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
+    await page.getByRole('link', { name: 'Open profile', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Add quote', exact: true })).toBeVisible();
+    await expect(page.getByRole('alert')).not.toBeVisible();
+  });
+});
