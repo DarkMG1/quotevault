@@ -5,6 +5,22 @@ import { clearProfileCache } from '../lib/profile-cache';
 import { UserCircle, Shield, Loader2, Save, KeyRound } from 'lucide-react';
 import { getErrorMessage } from './ui';
 
+function FormMessage({ message }: { message: { text: string; type: string } }) {
+    if (!message.text) return null;
+    const success = message.type === 'success';
+    return (
+        <div
+            className={`mb-6 p-4 rounded-xl text-sm border ${success
+                ? 'bg-green-500/10 border-green-500/20 text-green-400'
+                : 'bg-red-500/10 border-red-500/20 text-red-400'}`}
+            role={success ? 'status' : 'alert'}
+            aria-live="polite"
+        >
+            {message.text}
+        </div>
+    );
+}
+
 export const Profile = () => {
     const { user } = useAuth();
 
@@ -115,9 +131,7 @@ export const Profile = () => {
                     <h3 className="text-lg font-semibold text-white">Personal Information</h3>
                 </div>
 
-                {infoMessage.text && <div className={`mb-6 p-4 rounded-xl text-sm border ${infoMessage.type === 'success' ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`} role={infoMessage.type === 'success' ? 'status' : 'alert'} aria-live="polite">
-                    {infoMessage.text}
-                </div>}
+                <FormMessage message={infoMessage} />
 
                 <form onSubmit={handleUpdateInfo} className="space-y-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -177,13 +191,12 @@ export const Profile = () => {
                     <h3 className="text-lg font-semibold text-white">Security</h3>
                 </div>
 
-                {passwordMessage.text && <div className={`mb-6 p-4 rounded-xl text-sm border ${passwordMessage.type === 'success' ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`} role={passwordMessage.type === 'success' ? 'status' : 'alert'} aria-live="polite">
-                    {passwordMessage.text}
-                </div>}
+                <FormMessage message={passwordMessage} />
 
                 <form onSubmit={handleUpdatePassword} className="space-y-4">
                     <p className="text-sm text-slate-400 mb-6 leading-relaxed">
-                        Update your personal login password. This is exactly what you use to sign in to your individual account and is completely separate from the Shared Group Vault key.
+                        Update your personal login password. This is exactly what you use to sign in to your individual account
+                        and is completely separate from the Shared Group Vault key.
                     </p>
 
                     <div className="space-y-1.5">
