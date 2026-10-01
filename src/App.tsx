@@ -18,7 +18,14 @@ const Spinner = () => (
 );
 
 function UpdateNotice() {
-  const { needRefresh: [ready, setReady], updateServiceWorker } = useRegisterSW();
+  // Browsers only look for a new service worker on navigation, so a long-open app would never see the banner.
+  const { needRefresh: [ready, setReady], updateServiceWorker } = useRegisterSW({
+    onRegisteredSW: (_url, registration) => {
+      if (registration) setInterval(() => {
+        if (navigator.onLine) registration.update().catch(cause => console.warn('Update check failed:', cause));
+      }, 60 * 60 * 1000);
+    },
+  });
   if (!ready) return null;
   return <aside role="status" className="fixed bottom-0 inset-x-0 z-[60] bg-slate-800 border-t border-slate-600 p-4 flex flex-wrap items-center justify-center gap-3">
     <p className="text-sm">An update is ready. Finish saving your draft before reloading.</p>
