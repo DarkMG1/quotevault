@@ -96,7 +96,7 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
                 text: text.trim(),
                 author: author.trim(),
                 context: context.trim(),
-                ...(sourceSender.trim() ? { source_sender: sourceSender.trim() } : {}),
+                source_sender: sourceSender.trim(),
             });
             const encryptedBundle = await encryptData(payloadToEncrypt, encryptionKey);
             if (!isCiphertextWithinLimit(encryptedBundle)) {
