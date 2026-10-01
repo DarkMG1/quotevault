@@ -50,6 +50,13 @@ export function ImportQuotes({ onClose }: { onClose: () => void }) {
     const duplicateCount = checks.filter(check => check.duplicate).length;
     const updateRow = (index: number, change: (row: ImportRow) => ImportRow) =>
         setRows(rows.map((row, at) => at === index ? change(row) : row));
+    const reselect = (list: ImportRow[], quotes: ImportSnapshot['quotes']) => {
+        const matches = checkImports(list, quotes);
+        return list.map((row, index) => ({
+            ...row,
+            selected: row.selected && !matches[index].duplicate && !matches[index].similar,
+        }));
+    };
 
     async function checkFile(file: File) {
         if (!context || !encryptionKey || running.current) return;
@@ -72,11 +79,7 @@ export function ImportQuotes({ onClose }: { onClose: () => void }) {
                 return { ...row, author, context: matchedAuthorContext(row.author, author, row.context) };
             });
             fresh.quotes = fresh.quotes.map(row => ({ ...row, author: matchAuthor(row.author, profiles) }));
-            const matches = checkImports(parsed, fresh.quotes);
-            setRows(parsed.map((row, index) => ({
-                ...row,
-                selected: row.selected && !matches[index].duplicate && !matches[index].similar,
-            })));
+            setRows(reselect(parsed, fresh.quotes));
             setSnapshot(fresh);
         } catch (cause) {
             if (current()) {
@@ -106,11 +109,7 @@ export function ImportQuotes({ onClose }: { onClose: () => void }) {
                 if (!current()) return;
                 latest.quotes = latest.quotes.map(row => ({ ...row, author: matchAuthor(row.author, profiles) }));
                 if (latest.revision !== snapshot.revision) {
-                    const matches = checkImports(rows, latest.quotes);
-                    setRows(rows.map((row, index) => ({
-                        ...row,
-                        selected: row.selected && !matches[index].duplicate && !matches[index].similar,
-                    })));
+                    setRows(reselect(rows, latest.quotes));
                     setSnapshot(latest);
                     throw new Error('The vault changed. Duplicate checks have been updated; review the selection and try again.');
                 }
