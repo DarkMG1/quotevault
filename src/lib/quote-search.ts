@@ -2,7 +2,7 @@ import type { Quote } from '../types';
 
 type FilterableQuote = Pick<Quote, 'id' | 'text' | 'author' | 'context' | 'quote_date' | 'created_at'>;
 
-export type SortOrder = 'newest' | 'oldest';
+type SortOrder = 'newest' | 'oldest';
 
 /** One source of truth for the feed: empty strings mean "no filter". Dates are inclusive YYYY-MM-DD. */
 export interface QuoteFilters {
@@ -16,7 +16,7 @@ export interface QuoteFilters {
 export const NO_FILTERS: QuoteFilters = { text: '', author: '', from: '', to: '', order: 'newest' };
 
 /** The day a quote was said, falling back to the day it was saved. */
-export const quoteDay = (quote: Pick<Quote, 'quote_date' | 'created_at'>) => quote.quote_date || quote.created_at.slice(0, 10);
+const quoteDay = (quote: Pick<Quote, 'quote_date' | 'created_at'>) => quote.quote_date || quote.created_at.slice(0, 10);
 
 const participants = (author: string) => author.split(' & ').map(name => name.trim()).filter(Boolean);
 

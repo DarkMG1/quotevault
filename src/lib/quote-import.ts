@@ -14,9 +14,9 @@ export interface ImportRow {
     quote_date: string | null;
     selected: boolean;
 }
-export interface ExistingQuote { text: string; author: string; import_source_id?: string }
+interface ExistingQuote { text: string; author: string; import_source_id?: string }
 export interface ImportSnapshot { revision: number; quotes: ExistingQuote[] }
-export interface ImportCheck { duplicate: boolean; similar: string | null }
+interface ImportCheck { duplicate: boolean; similar: string | null }
 interface ImportOperation {
     operation_id: string; action: 'INSERT'; quote_id: string; actor_id: string;
     vault_generation: string; payload: Quote;
@@ -67,7 +67,7 @@ export function parseImportFile(text: string): ImportRow[] {
     });
 }
 
-export const normalizeQuote = (value: string) => value.normalize('NFKC').toLowerCase().replace(/[’‘]/g, "'")
+const normalizeQuote = (value: string) => value.normalize('NFKC').toLowerCase().replace(/[’‘]/g, "'")
     .replace(/[“”]/g, '"').replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
 const contentKey = (row: ExistingQuote) => JSON.stringify([normalizeQuote(row.text),
     [...new Set(normalizeQuote(row.author).split(/\s+&\s+/))].sort()]);
