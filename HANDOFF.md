@@ -1,6 +1,6 @@
 # QuoteVault — Handoff for the optimization and cleanup agent
 
-You are taking over QuoteVault to **optimize, clean up, speed up, and fix bad code without changing what the app does**. This document is everything you need. Read it fully before touching anything. As of 2026-10-01, `main` is at `3d24e15` and production serves that exact build.
+You are taking over QuoteVault to **optimize, clean up, speed up, and fix bad code without changing what the app does**. This document is everything you need. Read it fully before touching anything. As of 2026-10-01, production serves `2067ee4` (the optimization work below); the previous release was `3d24e15`.
 
 ---
 
@@ -92,7 +92,7 @@ A private PWA where a small friend group saves memorable quotes. Members sign in
 ## 4. Production facts
 
 - **Site:** https://quotes.darkmg1.dev. nginx on host `vps` (`ssh vps`, user `dark`) serves `/home/dark/quotevault/current/dist`.
-- **Releases:** `/home/dark/quotevault/releases/<full SHA>`. `current` points at `3d24e15…`, and `previous` is a rollback symlink. The deploy script maintains both.
+- **Releases:** `/home/dark/quotevault/releases/<full SHA>`. `current` points at `2067ee4…`, and `previous` (a manual rollback symlink) at `3d24e15…`. The deploy script switches only `current`; repoint `previous` by hand after each deploy.
   - Keep at least the current and one compatible previous release.
   - `a1bb840` and `cd3e697` are older shared-key releases kept for rollback.
   - `/pages/quotevault` no longer exists. It was a stale checkout; don't recreate it.
@@ -101,7 +101,7 @@ A private PWA where a small friend group saves memorable quotes. Members sign in
   python3 scripts/deploy.py <full 40-char SHA> --host vps --root /home/dark/quotevault \
     --site https://quotes.darkmg1.dev --env-file .env --database-verified
   ```
-  It builds the exact git archive, runs tests, lint and build, uploads, switches `current` atomically, and runs the health check, restoring `previous` on failure.
+  It builds the exact git archive, runs tests, lint and build, uploads, switches `current` atomically, and runs the health check, restoring the prior `current` on failure.
   - Instant manual rollback: `ssh vps 'cd /home/dark/quotevault && ln -sfn releases/<SHA> current.next && mv -Tf current.next current'`.
 - **Supabase project:** `umcprnfdaomntzhvmaoc` (PostgreSQL 17.6, us-east-1).
   - `.env` holds only `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` (a `sb_publishable_` key). `scripts/check-client-env.mjs` rejects any other `VITE_` variable.
@@ -173,7 +173,7 @@ git diff --check
 
 ## 7. Current state and open items
 
-- **Production:** shared-key schema, all 238 quotes verified. Release `3d24e15` is live with the rebuilt filters: one filter state, an exact-author picker, inclusive dates, removable chips, newest first by default with a toggle.
+- **Production:** shared-key schema, all 238 quotes verified. Release `2067ee4` is live; it builds on `3d24e15`'s rebuilt filters: one filter state, an exact-author picker, inclusive dates, removable chips, newest first by default with a toggle.
 - **Akash's device (`akashsarada@gmail.com`): resolved.**
   - It ran a pre-2026-09-20 cached build. On 2026-10-01 it uploaded its 14 queued quotes (224 → 238), and the operator confirmed **they display correctly**.
   - Its 3 rejected inserts were duplicates of quotes already on the server, and its 1 blocked delete came from the old app.
