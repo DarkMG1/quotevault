@@ -11,9 +11,9 @@ import { NO_FILTERS, authorParticipants, filterQuotes, type QuoteFilters } from 
 import { FilterBar } from './FilterBar';
 import { QuoteCard } from './QuoteCard';
 import { ScreenErrorBoundary } from './ScreenErrorBoundary';
+import { AddQuote } from './AddQuote';
 
 const ImportQuotes = lazy(() => import('./ImportQuotes').then(m => ({ default: m.ImportQuotes })));
-const AddQuote = lazy(() => import('./AddQuote').then(m => ({ default: m.AddQuote })));
 const MatchAuthors = lazy(() => import('./MatchAuthors').then(m => ({ default: m.MatchAuthors })));
 
 const secondaryButton = 'rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:text-white';
