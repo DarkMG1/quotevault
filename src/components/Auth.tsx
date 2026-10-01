@@ -267,7 +267,7 @@ export const AuthUI = () => {
                             type="submit"
                             disabled={loading || signingOut}
                             aria-busy={loading}
-                            className="w-full bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-500 hover:to-primary-400 text-white font-semibold py-3.5 rounded-xl shadow-lg shadow-primary-500/25 transition-all flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed hover:-translate-y-0.5"
+                            className={`${secondarySubmitClass} flex items-center justify-center space-x-2 disabled:cursor-not-allowed hover:-translate-y-0.5`}
                         >
                             {loading ? (
                                 <>
