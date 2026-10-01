@@ -9,8 +9,8 @@ const countingCrypto = { ...crypto, decryptData: (...args) => { decryptCalls++; 
 const ui = loadModule('src/components/ui.ts', { react: {}, '../lib/crypto': countingCrypto }, globals);
 const { decryptForFeed } = loadModule('src/components/feed-decrypt.ts', { './ui': ui }, globals);
 
-const key = await crypto.deriveEncryptionKey('test-only-password');
-const otherKey = await crypto.deriveEncryptionKey('another-test-password');
+const key = await crypto.deriveEncryptionKey('test-only-password', crypto.LEGACY_KDF);
+const otherKey = await crypto.deriveEncryptionKey('another-test-password', crypto.LEGACY_KDF);
 const seal = async (payload, sealKey = key) => '$$E2E$$' + JSON.stringify(await crypto.encryptData(JSON.stringify(payload), sealKey));
 const row = (id, text, extra = {}) => ({
   id, text, author: 'ENCRYPTED', context: 'ENCRYPTED', created_at: '2026-09-20T12:00:00Z',

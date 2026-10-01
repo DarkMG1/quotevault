@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { loadModule } from './load-module.mjs';
 const crypt = loadModule('src/lib/crypto.ts', {}, { crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob });
-const key = await crypt.deriveEncryptionKey('synthetic-import-key');
+const key = await crypt.deriveEncryptionKey('synthetic-import-key', crypt.LEGACY_KDF);
 const ui = loadModule('src/components/ui.ts', { react: {}, '../lib/crypto': crypt });
 const storage = new Map();
 const queue = [];

@@ -67,7 +67,7 @@ const encryptedUi = load('src/components/ui.ts', {
   react: { useEffect: () => {}, useRef: initial => ({ current: initial }) },
   '../lib/crypto': { decryptData: cryptoModule.decryptData },
 });
-const encryptionKey = await cryptoModule.deriveEncryptionKey('test-only-password');
+const encryptionKey = await cryptoModule.deriveEncryptionKey('test-only-password', cryptoModule.LEGACY_KDF);
 const encryptedBundle = await cryptoModule.encryptData(JSON.stringify({ text: 'decoded', author: 'Ada', source_sender: 'Grace' }), encryptionKey);
 const roundTrip = await encryptedUi.decryptQuoteForDisplay({
   id: 'q3', text: `$$E2E$$${JSON.stringify(encryptedBundle)}`, author: 'ENCRYPTED', source_sender: 'spoofed',

@@ -24,7 +24,7 @@ export interface VaultKdf { salt: string; iterations: number }
 // Existing ciphertext must retain its original derivation until an explicit vault reset.
 export const LEGACY_KDF: VaultKdf = { salt: btoa('QuoteVault-FixedSalt-2026'), iterations: 100000 };
 
-export const deriveEncryptionKey = async (password: string, kdf: VaultKdf = LEGACY_KDF): Promise<CryptoKey> => {
+export const deriveEncryptionKey = async (password: string, kdf: VaultKdf): Promise<CryptoKey> => {
     const salt = base64ToArrayBuffer(kdf.salt);
     if (salt.byteLength < 16 || salt.byteLength > 64 || !Number.isInteger(kdf.iterations) ||
         kdf.iterations < 100000 || kdf.iterations > 2000000) {

@@ -19,8 +19,12 @@ test('rejects malicious derivation metadata before expensive work', async () => 
   await assert.rejects(deriveEncryptionKey('test', { salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 999999999 }));
 });
 
+test('derivation requires explicit vault settings', async () => {
+  await assert.rejects(deriveEncryptionKey('test-only-password'));
+});
+
 test('ciphertext tampering is rejected', async () => {
-  const key = await deriveEncryptionKey('test-only-password');
+  const key = await deriveEncryptionKey('test-only-password', exports.LEGACY_KDF);
   const payload = await encryptData('café', key);
   const bytes = Buffer.from(payload.data, 'base64');
   bytes[0] ^= 1;
@@ -36,7 +40,7 @@ test('new vault verification supports offline unlock and rejects the wrong secre
 });
 
 test('legacy ciphertext can verify the existing key without a fast password hash', async () => {
-  const key = await deriveEncryptionKey('old-test-key');
+  const key = await deriveEncryptionKey('old-test-key', exports.LEGACY_KDF);
   const verifier = await encryptData(JSON.stringify({ text: 'existing quote', author: 'Test' }), key);
   const unlocked = await exports.unlockWithVerifier('old-test-key', exports.LEGACY_KDF, verifier);
   assert.equal(await decryptData(verifier, unlocked), JSON.stringify({ text: 'existing quote', author: 'Test' }));
