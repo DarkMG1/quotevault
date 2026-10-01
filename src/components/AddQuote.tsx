@@ -193,7 +193,7 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
                             className="w-full bg-slate-800/50 border border-slate-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
                         />
                     </>}
-                    <fieldset disabled={isLoadingProfiles} className="mt-2">
+                    <fieldset disabled={isLoadingProfiles} aria-busy={isLoadingProfiles} className="mt-2">
                         <legend className="block text-sm font-medium text-slate-300 mb-1">{edit ? 'Add profile authors' : 'Author'}</legend>
                         <p className="mb-2 text-sm text-slate-400">Choose one or more people.</p>
                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
