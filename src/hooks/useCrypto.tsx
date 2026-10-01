@@ -264,7 +264,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
     }, [canSync, deviceState, getDeviceAuthorization, lockVault, user]);
     const approveDeviceRequest = useCallback(async (requestId: string, fingerprint: string, code: string) => {
         const vault = stateRef.current; if (!vault) throw new Error('Unlock an approved device first.');
-        const epoch = keyEpoch.current; const generation = approvalGeneration(vault); const bootstrap = isLegacyVaultState(vault) && vault.envelope_status === 'preparing' && preparedMasterKeyBootstrap.current && preparedMasterKeyGeneration.current === generation; const master = vault.envelope_status === 'preparing' && isLegacyVaultState(vault) ? await getApprovedTargetMasterKey(generation) : masterKey.current?.slice() ?? null;
+        const epoch = keyEpoch.current; const generation = approvalGeneration(vault); const bootstrap = isLegacyVaultState(vault) && vault.envelope_status === 'preparing' && preparedMasterKeyBootstrap.current && preparedMasterKeyGeneration.current === generation; if (!bootstrap) { const local = user ? await loadDeviceState(user.id) : null; if (!local?.wrapper && !local?.preparedWrapper) throw new Error('This browser has no approved device. Open the approval link on another approved device, such as an administrator\'s.'); } const master = vault.envelope_status === 'preparing' && isLegacyVaultState(vault) ? await getApprovedTargetMasterKey(generation) : masterKey.current?.slice() ?? null;
         if (!master) throw new Error('Unlock an approved device first.');
         try {
             const request = await getDeviceRequest(requestId); if (request.enrollmentFingerprint !== fingerprint || await formatEnrollmentCode(request.enrollmentFingerprint) !== code.trim().toUpperCase()) throw new Error('The verification code does not match this device request.');
@@ -275,7 +275,7 @@ export const CryptoProvider = ({ children }: { children: ReactNode }) => {
             await approveDevice({ requestId, ownerId: request.ownerId, publicKeyFingerprint: request.publicKeyFingerprint, enrollmentFingerprint: request.enrollmentFingerprint, wrappedKey, generation, approverDeviceId: auth?.deviceId ?? null, approverToken: auth?.token ?? null });
             if (bootstrap) preparedMasterKeyBootstrap.current = false;
         } finally { master.fill(0); }
-    }, [getApprovedTargetMasterKey, getDeviceAuthorization]);
+    }, [getApprovedTargetMasterKey, getDeviceAuthorization, user]);
     const setupRecovery = useCallback(async (phrase: string, replace = false) => {
         const vault = stateRef.current; if (!user || !vault) throw new Error('Unlock the vault before setting up recovery.');
         const epoch = keyEpoch.current; const generation = approvalGeneration(vault); const preparingLegacy = vault.envelope_status === 'preparing' && isLegacyVaultState(vault); const master = preparingLegacy ? await getApprovedTargetMasterKey(generation) : masterKey.current?.slice() ?? null;

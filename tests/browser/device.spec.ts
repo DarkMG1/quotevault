@@ -39,10 +39,47 @@ test('a new device shows its approval code and can check approval after reload',
   await signIn(page);
   await page.getByRole('button', { name: 'Remember this device', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Device approval pending' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Open approval request' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Approval link — open it on another approved device' })).toBeVisible();
   await expect(page.getByRole('img', { name: 'Device approval QR code' })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('button', { name: 'Check approval', exact: true })).toBeVisible();
+});
+
+test('the requesting browser explains that another approved device must approve it', async ({ page }) => {
+  // Mirrors production: legacy preparation, the member unlocked with the shared key, enrolling from Profile.
+  await page.route('**/rest/v1/rpc/get_vault_bootstrap_state', async route => {
+    const legacyState = await (await route.fetch()).json();
+    return route.fulfill({ json: { ...legacyState, envelope_status: 'preparing', prepared_generation: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' } });
+  });
+  let request: Record<string, string>;
+  let renewals = 0;
+  page.on('request', sent => { if (sent.url().includes('/functions/v1/vault-security')) renewals++; });
+  await page.route('**/rest/v1/rpc/request_device', route => {
+    request = route.request().postDataJSON();
+    return route.fulfill({ json: { request_id: request.p_device_id, device_id: request.p_device_id,
+      enrollment_fingerprint: request.p_enrollment_fingerprint, expires_at: new Date(Date.now() + 600000).toISOString() } });
+  });
+  await page.route('**/rest/v1/rpc/get_device_request', route => route.fulfill({ json: {
+    request_id: request.p_device_id, owner_id: accountId, request_kind: 'first', label: request.p_label,
+    public_jwk: request.p_public_jwk, public_key_fingerprint: request.p_public_key_fingerprint,
+    authorization_token_digest: request.p_token_digest, enrollment_fingerprint: request.p_enrollment_fingerprint,
+    protection_mode: request.p_protection_mode, protection: request.p_protection,
+    expires_at: new Date(Date.now() + 600000).toISOString(),
+  } }));
+  await signIn(page);
+  await page.getByLabel('Group Vault Key').fill('demo-vault-key');
+  await page.getByRole('button', { name: 'Unlock Vault' }).click();
+  await page.getByRole('link', { name: 'Open profile' }).click();
+  await page.getByRole('button', { name: 'Remember this device', exact: true }).click();
+  const approvalLink = page.getByRole('link', { name: /approval/i });
+  await expect(approvalLink).toBeVisible();
+  const code = (await page.locator('.font-mono').first().innerText()).trim();
+  // The link is absolute to production; follow its #approve route on the local origin.
+  await page.goto(`/${new URL((await approvalLink.getAttribute('href'))!).hash}`);
+  await page.getByLabel('Verification code').fill(code);
+  await page.getByRole('button', { name: 'Approve device' }).click();
+  await expect(page.getByRole('alert')).toContainText('another approved device');
+  expect(renewals, 'no lease renewal is attempted for an unapproved device').toBe(0);
 });
 
 async function rememberedDevice(page: Page, recoverySetupRequired = false, email = 'browser-test@example.com') {
