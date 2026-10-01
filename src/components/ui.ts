@@ -14,7 +14,7 @@ export function getErrorMessage(error: unknown, fallback: string): string {
             : fallback;
 }
 
-export const MAX_CIPHERTEXT_DATA_LENGTH = 262_144;
+const MAX_CIPHERTEXT_DATA_LENGTH = 262_144;
 
 export function isCiphertextWithinLimit(payload: unknown): payload is { data: string } {
     return typeof payload === 'object' && payload !== null && 'data' in payload
