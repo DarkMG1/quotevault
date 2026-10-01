@@ -41,6 +41,15 @@ test('import checks duplicates, encrypts provenance, and safely skips a repeated
     await expect(repeated.getByRole('button', {name: 'Import 0 selected quotes'})).toBeDisabled();
 });
 
+test('import leaves a possible duplicate unselected', async ({ page }) => {
+    await enterVault(page);
+    const text = 'A distinctive synthetic line checked for similar imports.';
+    const dialog = await loadFile(page, [row(text, '1'), row(text.replace('line', 'phrase'), '2')]);
+    await expect(dialog.getByText('1 selected · 0 duplicates skipped', {exact: true})).toBeVisible();
+    await expect(dialog.getByRole('checkbox', {name: 'Quote 1'})).toBeChecked();
+    await expect(dialog.getByRole('checkbox', {name: 'Quote 2'})).not.toBeChecked();
+});
+
 test('a lost import response survives reload and retries the identical encrypted batch', async ({ page }) => {
     await enterVault(page);
     const quote = row('Retry this uniquely identifiable synthetic entry safely.', 'e');
