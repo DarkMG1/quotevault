@@ -9,7 +9,8 @@ import { useCrypto } from '../hooks/useCrypto';
 import { isAdminUser } from '../lib/access';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Quote } from '../types';
-import { decryptQuoteForDisplay, getErrorMessage, useModalDialog } from './ui';
+import { getErrorMessage, useModalDialog } from './ui';
+import { decryptForFeed, type DecryptCache } from './feed-decrypt';
 import { NO_FILTERS, authorParticipants, filterQuotes, type QuoteFilters } from '../lib/quote-search';
 
 const formatDay = (day: string) => new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
@@ -31,6 +32,7 @@ export const Feed = () => {
     const deleteDialogRef = useRef<HTMLDialogElement>(null);
     const cancelDeleteRef = useRef<HTMLButtonElement>(null);
     const decryptionRequest = useRef(0);
+    const decryptCache = useRef<DecryptCache | undefined>(undefined);
     const isAdmin = isAdminUser(user);
 
     useModalDialog(deleteDialogRef, Boolean(quoteToDelete), () => setQuoteToDelete(null), cancelDeleteRef);
@@ -42,7 +44,9 @@ export const Feed = () => {
             return () => { active = false; };
         }
 
-        Promise.all(quotes.map((quote) => decryptQuoteForDisplay(quote, encryptionKey)))
+        const { cache, decrypted } = decryptForFeed(quotes, encryptionKey, decryptCache.current);
+        decryptCache.current = cache;
+        decrypted
             .then((mapped) => {
                 if (active && requestId === decryptionRequest.current) setDecryptedQuotes(mapped);
             });
