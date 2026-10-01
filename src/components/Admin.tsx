@@ -80,7 +80,11 @@ export const AdminDashboard = () => {
 
     const handleWipeAndChangeKey = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (isWiping || !vaultGeneration || !user || !isAdmin) return;
+        if (isWiping) return;
+        if (!vaultGeneration || !user || !isAdmin) {
+            setWipeErrorMsg('Unlock the vault as the administrator before changing the key.');
+            return;
+        }
         if (vaultConfirm !== 'ERASE EVERYTHING') {
             setWipeErrorMsg('You must type exactly "ERASE EVERYTHING" to confirm.');
             return;

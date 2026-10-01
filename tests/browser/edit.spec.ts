@@ -202,3 +202,47 @@ test('a non-administrator cannot start an edit', async ({ page }) => {
   await enterVault(page, 'syntheticmember@example.invalid');
   await expect(page.getByRole('button', { name: /^Edit quote by / })).toHaveCount(0);
 });
+
+test('an edit interrupted by a session change says so instead of staying open silently', async ({ page }) => {
+  await enterVault(page);
+  let release!: () => void;
+  const released = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/rpc/edit_quote', async route => { await released; await route.continue(); });
+  await page.getByRole('button', { name: `Edit quote by ${compound.author}`, exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit Quote', exact: true });
+  await expect(dialog.getByLabel('Quote', { exact: true })).toHaveValue(compound.text);
+  const sent = page.waitForRequest('**/rpc/edit_quote');
+  await dialog.getByRole('button', { name: 'Save Changes', exact: true }).click();
+  await sent;
+  await page.evaluate(() => window.dispatchEvent(new Event('offline')));
+  release();
+  await expect(dialog.getByRole('alert')).toContainText('Your session changed while saving');
+  await expect(dialog.getByLabel('Quote', { exact: true })).toHaveValue(compound.text);
+});
+
+test('matching authors with a quote from another vault generation shows an error', async ({ page }) => {
+  await enterVault(page);
+  await page.evaluate(id => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open('QuoteVaultDB');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const tx = open.result.transaction('quotes', 'readwrite');
+      const store = tx.objectStore('quotes');
+      const get = store.get(id);
+      get.onsuccess = () => store.put({ ...get.result, vault_generation: '22222222-2222-4222-8222-222222222222' });
+      tx.oncomplete = () => { open.result.close(); resolve(); };
+      tx.onerror = () => reject(tx.error);
+    };
+  }), compound.id);
+  await page.reload();
+  await page.getByLabel('Group Vault Key').fill('demo-vault-key');
+  await page.getByRole('button', { name: 'Unlock Vault', exact: true }).click();
+  let edits = 0;
+  page.on('request', request => { if (request.url().endsWith('/rpc/edit_quotes')) edits++; });
+  await page.getByRole('button', { name: 'Match imported authors', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Match imported authors', exact: true });
+  await dialog.getByLabel(`Replace author ${compound.author}`, { exact: true }).fill('Morgan Lee');
+  await dialog.getByRole('button', { name: /^Save \d+ author corrections$/ }).click();
+  await expect(dialog.getByRole('alert')).toContainText('The vault changed');
+  expect(edits).toBe(0);
+});

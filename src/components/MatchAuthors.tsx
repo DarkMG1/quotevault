@@ -50,8 +50,15 @@ export function MatchAuthors({ onClose }: { onClose: () => void }) {
     const changes = rows.filter(row => mapping[row.author]?.trim() && mapping[row.author].trim() !== row.author)
         .map(row => ({ quote: row.quote, author: mapping[row.author] }));
     async function save() {
-        if (busy || !isAdminUser(user) || !canSync || !encryptionKey) return;
-        if (rows.some(row => row.quote.vault_generation !== vaultGeneration)) return;
+        if (busy) return;
+        if (!isAdminUser(user) || !canSync || !encryptionKey) {
+            setError('An online admin session is required to save author corrections.');
+            return;
+        }
+        if (rows.some(row => row.quote.vault_generation !== vaultGeneration)) {
+            setError('The vault changed. Sync, then reopen this dialog.');
+            return;
+        }
         const epoch = lifecycle.current;
         setBusy(true); setError('');
         try {

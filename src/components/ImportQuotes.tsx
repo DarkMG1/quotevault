@@ -31,6 +31,7 @@ export function ImportQuotes({ onClose }: { onClose: () => void }) {
         () => actorId && vaultGeneration ? { actorId, generation: vaultGeneration, onGenerationMismatch: lockVault } : null,
         [actorId, vaultGeneration, lockVault],
     );
+    const ready = !!context && !!encryptionKey;
     useModalDialog(dialog, true, onClose, close);
     useEffect(() => {
         const currentLifecycle = lifecycle;
@@ -163,7 +164,9 @@ export function ImportQuotes({ onClose }: { onClose: () => void }) {
                 Raw backups are never uploaded here.
             </p>
         </details>
-        {error && <p role="alert" className="my-4 rounded bg-red-950/50 p-3 text-red-200">{error}</p>}
+        {(error || !ready) && <p role="alert" className="my-4 rounded bg-red-950/50 p-3 text-red-200">
+            {error || 'Sign in and unlock the vault before importing.'}
+        </p>}
         {message && <p role="status" className="my-4 rounded bg-green-950/50 p-3 text-green-200">{message}</p>}
         {pending ? (
             <div className="my-4 rounded border border-amber-700 p-4">
@@ -192,7 +195,7 @@ export function ImportQuotes({ onClose }: { onClose: () => void }) {
                 />
             </label>
         )}
-        {busy && <p role="status">Checking the vault…</p>}
+        {busy && ready && <p role="status">Checking the vault…</p>}
         {!!rows.length && !pending && <>
             <datalist id="import-author-names">{authorNames.map(name => <option key={name} value={name} />)}</datalist>
             <div className="sticky top-0 z-10 my-4 flex flex-wrap items-center gap-3 border-y border-slate-700 bg-surface py-3">

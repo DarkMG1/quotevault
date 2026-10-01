@@ -81,7 +81,9 @@ export const AddQuote = ({ onClose, edit }: AddQuoteProps) => {
                     throw new Error('An online admin session is required to edit quotes.');
                 }
                 await saveQuoteEdit(edit.stored, { text, author, context, quoteDate }, encryptionKey, () => lifecycle.current === epoch);
-                if (lifecycle.current === epoch) { await refresh(); onClose(); }
+                if (lifecycle.current !== epoch) throw new Error('Your session changed while saving. Check the quote before editing again.');
+                await refresh();
+                onClose();
                 return;
             }
             const submitter = profiles.find(profile => profile.id === user?.id);
