@@ -1,7 +1,4 @@
-import { ImportQuotes } from './ImportQuotes';
-import { AddQuote } from './AddQuote';
-import { MatchAuthors } from './MatchAuthors';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw, Trash2, X } from 'lucide-react';
 import { useQuotes } from '../hooks/useQuotes';
 import { useAuth } from '../hooks/useAuth';
@@ -13,6 +10,10 @@ import { decryptForFeed, type DecryptCache } from './feed-decrypt';
 import { NO_FILTERS, authorParticipants, filterQuotes, type QuoteFilters } from '../lib/quote-search';
 import { FilterBar } from './FilterBar';
 import { QuoteCard } from './QuoteCard';
+
+const ImportQuotes = lazy(() => import('./ImportQuotes').then(m => ({ default: m.ImportQuotes })));
+const AddQuote = lazy(() => import('./AddQuote').then(m => ({ default: m.AddQuote })));
+const MatchAuthors = lazy(() => import('./MatchAuthors').then(m => ({ default: m.MatchAuthors })));
 
 const secondaryButton = 'rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:text-white';
 
@@ -102,9 +103,11 @@ export const Feed = () => {
 
     return (
         <div className="px-4 py-6 space-y-6">
-            {importOpen && <ImportQuotes onClose={() => setImportOpen(false)} />}
-            {matchingAuthors && isAdmin && <MatchAuthors onClose={() => setMatchingAuthors(false)} />}
-            {quoteToEdit && isAdmin && <AddQuote edit={quoteToEdit} onClose={() => setQuoteToEdit(null)} />}
+            <Suspense fallback={null}>
+                {importOpen && <ImportQuotes onClose={() => setImportOpen(false)} />}
+                {matchingAuthors && isAdmin && <MatchAuthors onClose={() => setMatchingAuthors(false)} />}
+                {quoteToEdit && isAdmin && <AddQuote edit={quoteToEdit} onClose={() => setQuoteToEdit(null)} />}
+            </Suspense>
             <button className={secondaryButton} onClick={() => setImportOpen(true)}>Import quotes</button>
             {isAdmin && <button className={`ml-3 ${secondaryButton}`} onClick={() => setMatchingAuthors(true)}>Match imported authors</button>}
             <FilterBar filters={filters} setFilters={setFilters} onClear={clearFilters} authors={authors}
