@@ -271,9 +271,8 @@ async function syncBatch(context: SyncContext, epoch: number): Promise<{ more: b
             if (!item || item.operation_id !== result.operation_id) continue;
             if (result.status === 'ok') {
                 await db.syncQueue.delete(result.operation_id);
-                if (item.action === 'INSERT') {
-                    const later = (await db.syncQueue.toArray()).some(next => next.quote_id === item.quote_id && next.id !== item.id);
-                    if (!later) await db.quotes.update(item.quote_id, { sync_status: 'synced' });
+                if (item.action === 'INSERT' && !await db.syncQueue.where('quote_id').equals(item.quote_id).count()) {
+                    await db.quotes.update(item.quote_id, { sync_status: 'synced' });
                 }
             } else {
                 await db.syncQueue.update(item.id, { status: 'rejected', error: result.error || 'The server rejected this change.' });

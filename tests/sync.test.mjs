@@ -19,7 +19,7 @@ function table() {
     async clear() { rows.clear(); },
     async toArray() { return structuredClone([...rows.values()]); },
     orderBy(field) { return { toArray: async () => structuredClone([...rows.values()].sort((a, b) => String(a[field]).localeCompare(String(b[field])))) }; },
-    where(field) { return { equals: value => ({ toArray: async () => structuredClone([...rows.values()].filter(row => row[field] === value)) }) }; },
+    where(field) { return { equals: value => ({ toArray: async () => structuredClone([...rows.values()].filter(row => row[field] === value)), count: async () => [...rows.values()].filter(row => row[field] === value).length }) }; },
   };
 }
 
@@ -101,6 +101,19 @@ await (async () => {
   assert.equal(db.syncQueue.rows.size, 1, 'a rejected operation persists without blocking acknowledged operations');
   assert.equal([...db.syncQueue.rows.values()][0].quote_id, 'bad');
   assert.equal([...db.syncQueue.rows.values()][0].error, 'denied');
+})();
+
+await (async () => {
+  const { db, sync } = setup();
+  await db.quotes.put(quote('held'));
+  await db.quotes.put(quote('free'));
+  await enqueue(db, sync, 'INSERT', quote('held'));
+  await enqueue(db, sync, 'INSERT', quote('free'));
+  await db.syncQueue.put({ id: 'legacy-delete', operation_id: 'legacy-delete', action: 'DELETE', quote_id: 'held', created_at: '2026-09-19T00:00:00.000Z', status: 'blocked', error: 'Deletion created before secure sync must be repeated.' });
+  await sync.processSyncQueue({ actorId: 'u1', generation: 'g1' });
+  assert.equal(db.quotes.rows.get('held').sync_status, 'pending', 'an acknowledged insert stays pending while another operation targets its quote');
+  assert.equal(db.quotes.rows.get('free').sync_status, 'synced', 'an acknowledged insert with no later operation is marked synced');
+  assert.deepEqual([...db.syncQueue.rows.keys()], ['legacy-delete'], 'acknowledgement never removes unrelated queued work');
 })();
 
 await (async () => {
