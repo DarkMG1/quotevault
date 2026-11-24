@@ -90,7 +90,7 @@ export function MatchAuthors({ onClose }: { onClose: () => void }) {
         </div>
         <p className="my-4 text-sm text-slate-300">
             Match names to existing profiles. For conversations, separate full names with &amp;.
-            Keep unknown or outside speakers as written. Directed attributions are preserved in context.
+            Outside speakers get consistent capitalization. Directed attributions are preserved in context.
             Only imported quotes are changed.
         </p>
         <datalist id="matched-author-names">{names.map(name => <option key={name} value={name} />)}</datalist>
